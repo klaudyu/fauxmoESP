@@ -2,7 +2,7 @@
 
 FAUXMO ESP
 
-Copyright (C) 2018-2020 by Xose Pérez <xose dot perez at gmail dot com>
+Copyright (C) 2018-2020 by Xose Pérez <xose dot perez at gmail dot com>, 2020-2021 by Paul Vint <paul@vintlabs.com>
 
 The MIT License (MIT)
 
@@ -36,7 +36,10 @@ PROGMEM const char FAUXMO_TCP_HEADERS[] =
 
 PROGMEM const char FAUXMO_TCP_STATE_RESPONSE[] = "["
     "{\"success\":{\"/lights/%d/state/on\":%s}},"
-    "{\"success\":{\"/lights/%d/state/bri\":%d}}"   // not needed?
+    "{\"success\":{\"/lights/%d/state/bri\":%d}},"   // not needed?
+    "{\"success\":{\"/lights/%d/state/hue\":%d}},"
+    "{\"success\":{\"/lights/%d/state/sat\":%d}},"
+    "{\"success\":{\"/lights/%d/state/ct\":%d}}"
 "]";
 
 // Working with gen1 and gen3, ON/OFF/%, gen3 requires TCP port 80
@@ -44,26 +47,27 @@ PROGMEM const char FAUXMO_DEVICE_JSON_TEMPLATE[] = "{"
     "\"type\": \"Extended color light\","
     "\"name\": \"%s\","
     "\"uniqueid\": \"%s\","
-    "\"modelid\": \"LCT015\","
-    "\"manufacturername\": \"Philips\","
-    "\"productname\": \"E4\","
+    "\"modelid\": \"LLC020\","
+    "\"manufacturername\": \"Signify Netherlands B.V.\","
+    "\"productname\": \"Hue go\","
     "\"state\":{"
         "\"on\": %s,"
 	"\"bri\": %d,"
 	"\"xy\": [0,0],"
-	"\"hue\": 0,"
-	"\"sat\": 0,"
+    "\"colormode\": \"%s\","
+	"\"hue\": %d,"
+	"\"sat\": %d,"
 	"\"effect\": \"none\","
-	"\"colormode\": \"xy\","
-	"\"ct\": 500,"
+	"\"ct\": %d,"
 	"\"mode\": \"homeautomation\","
 	"\"reachable\": true"
     "},"
     "\"capabilities\": {"
-        "\"certified\": false,"
+        "\"certified\": true,"
         "\"streaming\": {\"renderer\":true,\"proxy\":false}"
+        //R"(,"effects":["samba","dance","candle"])"
     "},"
-    "\"swversion\": \"5.105.0.21169\""
+    "\"swversion\": \"67.116.3\""
 "}";
 
 // Use shorter description template when listing all devices

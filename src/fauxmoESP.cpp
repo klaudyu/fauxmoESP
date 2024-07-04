@@ -2,7 +2,7 @@
 
 FAUXMO ESP
 
-Copyright (C) 2016-2020 by Xose Pérez <xose dot perez at gmail dot com>
+Copyright (C) 2016-2020 by Xose Pérez <xose dot perez at gmail dot com>, 2020-2021 by Paul Vint <paul@vintlabs.com>
 
 The MIT License (MIT)
 
@@ -127,7 +127,11 @@ String fauxmoESP::_deviceJson(unsigned char id, bool all = true) {
 			FAUXMO_DEVICE_JSON_TEMPLATE,
 			device.name, device.uniqueid,
 			device.state ? "true": "false",
-			device.value
+			device.value,
+			device.colormode,
+			device.hue,
+			device.saturation,
+			device.ct
 		);
 	}
 	else
@@ -198,39 +202,124 @@ bool fauxmoESP::_onTCPDescription(AsyncClient *client, String url, String body) 
 
 }
 
+// New function to generate lights JSON
+String fauxmoESP::_listLightsJson(unsigned char id = 0) {
+    String response;
+    
+    // If id is 0, return all lights
+    if (0 == id) {
+        response = "{";
+        for (unsigned char i = 0; i < _devices.size(); i++) {
+            if (i > 0) response += ",";
+            response += "\"" + String(i+1) + "\":" + _deviceJson(i);  // send short template
+        }
+        response += "}";
+    } 
+    // Otherwise, return the specified light
+    else if (id <= _devices.size()) {
+        response = _deviceJson(id-1);
+    }
+    // If id is out of range, return an empty object
+    else {
+        response = "{}";
+    }
+    
+    return response;
+}
+
+String fauxmoESP::_listConfig() {
+    // Get MAC address
+    String mac = WiFi.macAddress();
+    mac.replace(":", "."); // Replace colons with dots to match the format in the original string
+
+    // Get IP address
+    IPAddress ip = WiFi.localIP();
+    String ipString = ip.toString();
+
+    // Use a raw string literal for the JSON structure
+    String response = R"({
+        "name": "Hue Bridge",
+        "bridgeid": "001788FFFEB0E55D",
+        "apiversion": "1.65.0",
+        "swversion": "1965053020",
+        "linkbutton": false,
+		"modelid":"BSB002",
+        "mac": ")" + mac + R"(",
+        "ip": ")" + ipString + R"(",
+        "swupdate2": {
+            "state": "noupdates",
+            "bridge": {
+                "state": "noupdates",
+                "lastinstall": "2024-06-25T12:57:04"
+            }
+        },
+		"groups":{}
+    })";
+
+    // Remove whitespace to maintain the original single-line format
+    response.replace("\n", "");
+    response.replace(" ", "");
+    return response;
+}
+
+String fauxmoESP::_listGroups() {
+	return "{}";
+	String response = R"({
+		 	"1":{
+				"name": "group1",
+				"lights": ["1"],
+				"sensors": [],
+				"type": "Room",
+				"class": "Bedroom",
+				"action": {"on": false,"alert": "none"},
+				"recycle": false,
+				"state":{ "all_on": false, "any_on": false}
+				}
+			})";
+	response.replace("\n", "");
+	response.replace(" ", "");
+	return response;
+}
+
+// Updated _onTCPList function
 bool fauxmoESP::_onTCPList(AsyncClient *client, String url, String body) {
+    DEBUG_MSG_FAUXMO("[FAUXMO] Handling list request\n");
 
-	DEBUG_MSG_FAUXMO("[FAUXMO] Handling list request\n");
+    // Prepare the response string
+    String response;
+	bool option_set=false;
 
-	// Get the index
-	int pos = url.indexOf("lights");
-	if (-1 == pos) return false;
+	// Check for groups request
+    int pos = url.indexOf("groups");
+    if (pos != -1) {
+		response=_listGroups();
+		option_set=true;
+    }
 
-	// Get the id
-	unsigned char id = url.substring(pos+7).toInt();
+    // Check for config request
+    pos = url.indexOf("config");
+    if (pos != -1) {
+		response=_listConfig();
+		option_set=true;
+    }
 
-	// This will hold the response string	
-	String response;
-
-	// Client is requesting all devices
-	if (0 == id) {
-
-		response += "{";
-		for (unsigned char i=0; i< _devices.size(); i++) {
-			if (i>0) response += ",";
-			response += "\"" + String(i+1) + "\":" + _deviceJson(i, false);	// send short template
-		}
-		response += "}";
-
-	// Client is requesting a single device
-	} else {
-		response = _deviceJson(id-1);
+    // Check for lights request
+    pos = url.indexOf("lights");
+    // If "lights" is not in the URL, or if it's at the end of the URL (no ID specified)
+    if (pos != -1){
+        unsigned char id = url.substring(pos+7).toInt();
+        response = _listLightsJson(id);
+		option_set=true;
 	}
 
-	_sendTCPResponse(client, "200 OK", (char *) response.c_str(), "application/json");
-	
-	return true;
+	if(!option_set){
+		response = "{\"lights\":" + _listLightsJson() +",\"config\":"+_listConfig()+ 
+		",\"groups\":"+ _listGroups() + 	"}";
+	};
 
+    _sendTCPResponse(client, "200 OK", (char *) response.c_str(), "application/json");
+    
+    return true;
 }
 
 bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
@@ -263,23 +352,58 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 				unsigned char value = body.substring(pos+5).toInt();
 				_devices[id].value = value;
 				_devices[id].state = (value > 0);
+				_adjustRGBFromValue(id);
 			} else if (body.indexOf("false") > 0) {
 				_devices[id].state = false;
 			} else {
 				_devices[id].state = true;
-				if (0 == _devices[id].value) _devices[id].value = 255;
+				if (0 == _devices[id].value) {
+					_devices[id].value = 254;
+					_setRGBFromHSV(id);
+				}
 			}
 
-			char response[strlen_P(FAUXMO_TCP_STATE_RESPONSE)+10];
+			// Hue / Saturation
+			pos = body.indexOf("hue");
+			if (pos > 0)
+			{
+				unsigned int hue = body.substring(pos + 5).toInt();
+				DEBUG_MSG_FAUXMO("[FAUXMO] Setting hue to %d\n", hue);
+				_devices[id].hue = hue;
+				strcpy(_devices[id].colormode, "hs");
+			}
+
+			pos = body.indexOf("\"sat\"");
+			if (pos > 0)
+			{
+				unsigned char saturation = body.substring(pos + 6).toInt();
+				DEBUG_MSG_FAUXMO("[FAUXMO] Setting saturation to %d\n", saturation);
+				_devices[id].saturation = saturation;
+				strcpy(_devices[id].colormode, "hs");
+				_setRGBFromHSV(id);
+			}
+
+			// Colour temperature
+			pos = body.indexOf("\"ct\"");
+			if (pos > 0)
+			{
+				unsigned int ct = body.substring(pos + 5).toInt();
+				DEBUG_MSG_FAUXMO("[FAUXMO] Setting ct to %d\n", ct);
+				_devices[id].ct = ct;
+				strcpy(_devices[id].colormode, "ct");
+				_setRGBFromCT(id);
+			}
+
+			char response[strlen_P(FAUXMO_TCP_STATE_RESPONSE)+23];
 			snprintf_P(
 				response, sizeof(response),
 				FAUXMO_TCP_STATE_RESPONSE,
-				id+1, _devices[id].state ? "true" : "false", id+1, _devices[id].value
+				id+1, _devices[id].state ? "true" : "false", id+1, _devices[id].value, id+1, _devices[id].hue, id+1, _devices[id].saturation, id+1, _devices[id].ct
 			);
-			_sendTCPResponse(client, "200 OK", response, "text/xml");
+			_sendTCPResponse(client, "200 OK", response, "application/json");
 
 			if (_setCallback) {
-				_setCallback(id, _devices[id].name, _devices[id].state, _devices[id].value);
+				_setCallback(id, _devices[id].name, _devices[id].state, _devices[id].value, _devices[id].hue, _devices[id].saturation, _devices[id].ct);
 			}
 
 			return true;
@@ -297,6 +421,7 @@ bool fauxmoESP::_onTCPRequest(AsyncClient *client, bool isGet, String url, Strin
     if (!_enabled) return false;
 
 	#if DEBUG_FAUXMO_VERBOSE_TCP
+		DEBUG_MSG_FAUXMO("================TCP REQUEST================================")
 		DEBUG_MSG_FAUXMO("[FAUXMO] isGet: %s\n", isGet ? "true" : "false");
 		DEBUG_MSG_FAUXMO("[FAUXMO] URL: %s\n", url.c_str());
 		if (!isGet) DEBUG_MSG_FAUXMO("[FAUXMO] Body:\n%s\n", body.c_str());
@@ -318,47 +443,41 @@ bool fauxmoESP::_onTCPRequest(AsyncClient *client, bool isGet, String url, Strin
 
 }
 
+
 bool fauxmoESP::_onTCPData(AsyncClient *client, void *data, size_t len) {
 
     if (!_enabled) return false;
 
-	char * p = (char *) data;
-	p[len] = 0;
+    _tcpBuffer += String((char*)data, len);
 
-	#if DEBUG_FAUXMO_VERBOSE_TCP
-		DEBUG_MSG_FAUXMO("[FAUXMO] TCP request\n%s\n", p);
-	#endif
-
-	// Method is the first word of the request
-	char * method = p;
-
-	while (*p != ' ') p++;
-	*p = 0;
-	p++;
-	
-	// Split word and flag start of url
-	char * url = p;
-
-	// Find next space
-	while (*p != ' ') p++;
-	*p = 0;
-	p++;
-
-	// Find double line feed
-	unsigned char c = 0;
-	while ((*p != 0) && (c < 2)) {
-		if (*p != '\r') {
-			c = (*p == '\n') ? c + 1 : 0;
-		}
-		p++;
+    // Check if we have a complete request
+    int headerEnd = _tcpBuffer.indexOf("\r\n\r\n");
+    if (headerEnd == -1) { return false;  // Incomplete header 
 	}
-	char * body = p;
 
-	bool isGet = (strncmp(method, "GET", 3) == 0);
+    // Check for Content-Length
+    int contentLengthPos = _tcpBuffer.indexOf("Content-Length: ");
+    if (contentLengthPos != -1) {
+        int contentLengthEnd = _tcpBuffer.indexOf("\r\n", contentLengthPos);
+        int contentLength = _tcpBuffer.substring(contentLengthPos + 16, contentLengthEnd).toInt();
+        if (_tcpBuffer.length() < (unsigned int)(headerEnd + 4 + contentLength)) {
+            return false;  // Incomplete body
+        }
+    }
 
-	return _onTCPRequest(client, isGet, url, body);
+    // Parse the request
+    int methodEnd = _tcpBuffer.indexOf(' ');
+    int urlEnd = _tcpBuffer.indexOf(' ', methodEnd + 1);
+    
+    String method = _tcpBuffer.substring(0, methodEnd);
+    String url = _tcpBuffer.substring(methodEnd + 1, urlEnd);
+    String body = _tcpBuffer.substring(headerEnd + 4);
 
+    bool isGet = (method == "GET");
+    _tcpBuffer = "";  // Clear the buffer
+    return _onTCPRequest(client, isGet, url.c_str(), body.c_str());
 }
+
 
 void fauxmoESP::_onTCPClient(AsyncClient *client) {
 
@@ -420,6 +539,128 @@ void fauxmoESP::_onTCPClient(AsyncClient *client) {
 
 }
 
+void fauxmoESP::_adjustRGBFromValue(unsigned char id) 
+{
+	if (id < 0) 
+		return;
+
+	// Get the greatest of the RGB values
+	uint8_t largest = (_devices[id].red > _devices[id].green) ? _devices[id].red : _devices[id].green;
+	largest = (_devices[id].blue > largest) ? _devices[id].blue : largest;
+
+	if (largest > 0)
+	{
+		float factor = (float) _devices[id].value / (float) largest;
+		_devices[id].red *= factor;
+		_devices[id].green *= factor;
+		_devices[id].blue *= factor;
+	}
+	else
+	{
+		_devices[id].red = 0;
+		_devices[id].green = 0;
+		_devices[id].blue = 0;
+	}
+}
+
+void fauxmoESP::_setRGBFromHSV(unsigned char id) 
+{
+	if (id < 0) 
+		return;
+
+	float dh, ds, dv;
+	dh = _devices[id].hue;
+	ds = _devices[id].saturation;
+	dv = _devices[id].value / 256.0;
+
+	// lifted from https://github.com/Aircoookie/Espalexa/blob/master/src/EspalexaDevice.cpp    
+	float h = ((float)dh)/65536.0;
+	float s = ((float)ds)/255.0;
+	byte i = floor(h*6);
+	float f = h * 6-i;
+	float p = 255 * (1-s);
+	float q = 255 * (1-f*s);
+	float t = 255 * (1-(1-f)*s);
+	switch (i%6) {
+		case 0: 
+			_devices[id].red = 255;
+			_devices[id].green = t;
+			_devices[id].blue = p;
+			break;
+		case 1: 
+			_devices[id].red = q;
+			_devices[id].green = 255;
+			_devices[id].blue = p;
+			break;
+		case 2: 
+			_devices[id].red = p;
+			_devices[id].green = 255;
+			_devices[id].blue = t;
+			break;
+		case 3: 
+			_devices[id].red = p;
+			_devices[id].green = q;
+			_devices[id].blue = 255;
+			break;
+		case 4: 
+			_devices[id].red = t;
+			_devices[id].green = p;
+			_devices[id].blue = 255;
+			break;
+		case 5: 
+			_devices[id].red = 255;
+			_devices[id].green = p;
+			_devices[id].blue = q;
+			break;
+	}
+
+	_devices[id].red = _devices[id].red * dv;
+	_devices[id].green = _devices[id].green * dv;
+	_devices[id].blue = _devices[id].blue * dv;
+
+ }
+
+void fauxmoESP::_setRGBFromCT(unsigned char id) 
+{
+	if (id < 0) 
+		return;
+
+	float temp = 10000.0 / _devices[id].ct;
+	float r, g, b;
+
+	if (temp <= 66)
+	{
+		r = 255;
+		g = 99.470802 * log(temp) - 161.119568;
+
+		if (temp <= 19)
+		{
+			b = 0;
+		}
+		else
+		{
+			b = 138.517731 * log(temp - 10) - 305.044793;
+		}
+	}
+	else
+	{
+		r = 329.698727 * pow(temp - 60, -0.13320476);
+		g = 288.12217 * pow(temp - 60, -0.07551485 );
+		b = 255;
+	}
+
+	r = constrain(r, 0, 255);
+	g = constrain(g, 0, 255);
+	b = constrain(b, 0, 255);
+
+	_devices[id].red = r;
+	_devices[id].green = g;
+	_devices[id].blue = b;
+
+	//printf("RGB %f %f %f\n", r, g, b);    
+
+}
+
 // -----------------------------------------------------------------------------
 // Devices
 // -----------------------------------------------------------------------------
@@ -448,8 +689,12 @@ unsigned char fauxmoESP::addDevice(const char * device_name) {
 
     // init properties
     device.name = strdup(device_name);
-  	device.state = false;
-	  device.value = 0;
+	device.state = false;
+	device.value = 0;
+	device.hue = 0;
+	device.saturation = 0;
+	device.ct = 500;
+	strcpy(device.colormode, "hs");
 
     // create the uniqueid
     String mac = WiFi.macAddress();
@@ -511,6 +756,74 @@ char * fauxmoESP::getDeviceName(unsigned char id, char * device_name, size_t len
         strncpy(device_name, _devices[id].name, len);
     }
     return device_name;
+}
+
+char * fauxmoESP::getColormode(unsigned char id, char * cm, size_t len)
+{
+	if (id < _devices.size())
+	{
+		strncpy(cm, _devices[id].colormode, len);
+	}
+
+	return cm;
+}
+
+uint8_t fauxmoESP::getRed(unsigned char id)
+{
+	return _devices[id].red;
+}
+
+uint8_t fauxmoESP::getGreen(unsigned char id)
+{
+	return _devices[id].green;
+}
+
+uint8_t fauxmoESP::getBlue(unsigned char id)
+{
+	return _devices[id].blue;
+}
+
+// For on/off and Brightness
+
+// For hue / Saturation
+bool fauxmoESP::setState(unsigned char id, bool state, unsigned int hue, unsigned int saturation) {
+	if (id < _devices.size()) 
+	{
+		_devices[id].hue = hue;
+		_devices[id].saturation = saturation;
+		return true;
+	}
+	return false;
+}
+
+bool fauxmoESP::setState(const char * device_name, bool state, unsigned int hue, unsigned int saturation) {
+	int id = getDeviceId(device_name);
+	if (id < 0) 
+		return false;
+	_devices[id].hue = hue;
+	_devices[id].saturation = saturation;
+	return true;
+}
+
+// For Colour Temperature (ct)
+bool fauxmoESP::setState(unsigned char id, bool state, unsigned int ct) {
+	if (id < _devices.size()) 
+	{
+		_devices[id].ct = ct;
+		_setRGBFromCT(id);
+		return true;
+	}
+	return false;
+}
+
+bool fauxmoESP::setState(const char * device_name, bool state, unsigned int ct) {
+	int id = getDeviceId(device_name);
+	if (id < 0) return false;
+
+	_devices[id].ct = ct;
+	_setRGBFromCT(id);
+	return true;
+
 }
 
 bool fauxmoESP::setState(unsigned char id, bool state, unsigned char value) {
