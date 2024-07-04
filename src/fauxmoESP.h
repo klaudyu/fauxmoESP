@@ -35,7 +35,7 @@ THE SOFTWARE.
 #define FAUXMO_RX_TIMEOUT           3
 #define FAUXMO_DEVICE_UNIQUE_ID_LENGTH  12
 
-//#define DEBUG_FAUXMO                Serial
+#define DEBUG_FAUXMO                Serial
 #ifdef DEBUG_FAUXMO
     #if defined(ARDUINO_ARCH_ESP32)
         #define DEBUG_MSG_FAUXMO(fmt, ...) { DEBUG_FAUXMO.printf_P((PGM_P) PSTR(fmt), ## __VA_ARGS__); }
@@ -47,11 +47,11 @@ THE SOFTWARE.
 #endif
 
 #ifndef DEBUG_FAUXMO_VERBOSE_TCP
-#define DEBUG_FAUXMO_VERBOSE_TCP    false
+#define DEBUG_FAUXMO_VERBOSE_TCP    true
 #endif
 
 #ifndef DEBUG_FAUXMO_VERBOSE_UDP
-#define DEBUG_FAUXMO_VERBOSE_UDP    false
+#define DEBUG_FAUXMO_VERBOSE_UDP    true
 #endif
 
 #include <Arduino.h>
@@ -122,6 +122,7 @@ class fauxmoESP {
 
     private:
 
+        String _tcpBuffer;
         AsyncServer * _server;
         bool _enabled = false;
         bool _internal = true;
@@ -151,6 +152,10 @@ class fauxmoESP {
         bool _onTCPList(AsyncClient *client, String url, String body);
         bool _onTCPControl(AsyncClient *client, String url, String body);
         void _sendTCPResponse(AsyncClient *client, const char * code, char * body, const char * mime);
+        String _listLightsJson(unsigned char id) ;
+        String _listConfig() ;
+        String _listGroups() ;
+        String _getLightStateJson(unsigned char id);
 
         String _byte2hex(uint8_t zahl);
         String _makeMD5(String text);

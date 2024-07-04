@@ -202,39 +202,124 @@ bool fauxmoESP::_onTCPDescription(AsyncClient *client, String url, String body) 
 
 }
 
+// New function to generate lights JSON
+String fauxmoESP::_listLightsJson(unsigned char id = 0) {
+    String response;
+    
+    // If id is 0, return all lights
+    if (0 == id) {
+        response = "{";
+        for (unsigned char i = 0; i < _devices.size(); i++) {
+            if (i > 0) response += ",";
+            response += "\"" + String(i+1) + "\":" + _deviceJson(i);  // send short template
+        }
+        response += "}";
+    } 
+    // Otherwise, return the specified light
+    else if (id <= _devices.size()) {
+        response = _deviceJson(id-1);
+    }
+    // If id is out of range, return an empty object
+    else {
+        response = "{}";
+    }
+    
+    return response;
+}
+
+String fauxmoESP::_listConfig() {
+    // Get MAC address
+    String mac = WiFi.macAddress();
+    mac.replace(":", "."); // Replace colons with dots to match the format in the original string
+
+    // Get IP address
+    IPAddress ip = WiFi.localIP();
+    String ipString = ip.toString();
+
+    // Use a raw string literal for the JSON structure
+    String response = R"({
+        "name": "Hue Bridge",
+        "bridgeid": "001788FFFEB0E55D",
+        "apiversion": "1.65.0",
+        "swversion": "1965053020",
+        "linkbutton": false,
+		"modelid":"BSB002",
+        "mac": ")" + mac + R"(",
+        "ip": ")" + ipString + R"(",
+        "swupdate2": {
+            "state": "noupdates",
+            "bridge": {
+                "state": "noupdates",
+                "lastinstall": "2024-06-25T12:57:04"
+            }
+        },
+		"groups":{}
+    })";
+
+    // Remove whitespace to maintain the original single-line format
+    response.replace("\n", "");
+    response.replace(" ", "");
+    return response;
+}
+
+String fauxmoESP::_listGroups() {
+	return "{}";
+	String response = R"({
+		 	"1":{
+				"name": "group1",
+				"lights": ["1"],
+				"sensors": [],
+				"type": "Room",
+				"class": "Bedroom",
+				"action": {"on": false,"alert": "none"},
+				"recycle": false,
+				"state":{ "all_on": false, "any_on": false}
+				}
+			})";
+	response.replace("\n", "");
+	response.replace(" ", "");
+	return response;
+}
+
+// Updated _onTCPList function
 bool fauxmoESP::_onTCPList(AsyncClient *client, String url, String body) {
+    DEBUG_MSG_FAUXMO("[FAUXMO] Handling list request\n");
 
-	DEBUG_MSG_FAUXMO("[FAUXMO] Handling list request\n");
+    // Prepare the response string
+    String response;
+	bool option_set=false;
 
-	// Get the index
-	int pos = url.indexOf("lights");
-	if (-1 == pos) return false;
+	// Check for groups request
+    int pos = url.indexOf("groups");
+    if (pos != -1) {
+		response=_listGroups();
+		option_set=true;
+    }
 
-	// Get the id
-	unsigned char id = url.substring(pos+7).toInt();
+    // Check for config request
+    pos = url.indexOf("config");
+    if (pos != -1) {
+		response=_listConfig();
+		option_set=true;
+    }
 
-	// This will hold the response string	
-	String response;
-
-	// Client is requesting all devices
-	if (0 == id) {
-
-		response += "{";
-		for (unsigned char i=0; i< _devices.size(); i++) {
-			if (i>0) response += ",";
-			response += "\"" + String(i+1) + "\":" + _deviceJson(i, false);	// send short template
-		}
-		response += "}";
-
-	// Client is requesting a single device
-	} else {
-		response = _deviceJson(id-1);
+    // Check for lights request
+    pos = url.indexOf("lights");
+    // If "lights" is not in the URL, or if it's at the end of the URL (no ID specified)
+    if (pos != -1){
+        unsigned char id = url.substring(pos+7).toInt();
+        response = _listLightsJson(id);
+		option_set=true;
 	}
 
-	_sendTCPResponse(client, "200 OK", (char *) response.c_str(), "application/json");
-	
-	return true;
+	if(!option_set){
+		response = "{\"lights\":" + _listLightsJson() +",\"config\":"+_listConfig()+ 
+		",\"groups\":"+ _listGroups() + 	"}";
+	};
 
+    _sendTCPResponse(client, "200 OK", (char *) response.c_str(), "application/json");
+    
+    return true;
 }
 
 bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
@@ -315,7 +400,7 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 				FAUXMO_TCP_STATE_RESPONSE,
 				id+1, _devices[id].state ? "true" : "false", id+1, _devices[id].value, id+1, _devices[id].hue, id+1, _devices[id].saturation, id+1, _devices[id].ct
 			);
-			_sendTCPResponse(client, "200 OK", response, "text/xml");
+			_sendTCPResponse(client, "200 OK", response, "application/json");
 
 			if (_setCallback) {
 				_setCallback(id, _devices[id].name, _devices[id].state, _devices[id].value, _devices[id].hue, _devices[id].saturation, _devices[id].ct);
@@ -336,6 +421,7 @@ bool fauxmoESP::_onTCPRequest(AsyncClient *client, bool isGet, String url, Strin
     if (!_enabled) return false;
 
 	#if DEBUG_FAUXMO_VERBOSE_TCP
+		DEBUG_MSG_FAUXMO("================TCP REQUEST================================")
 		DEBUG_MSG_FAUXMO("[FAUXMO] isGet: %s\n", isGet ? "true" : "false");
 		DEBUG_MSG_FAUXMO("[FAUXMO] URL: %s\n", url.c_str());
 		if (!isGet) DEBUG_MSG_FAUXMO("[FAUXMO] Body:\n%s\n", body.c_str());
@@ -357,47 +443,41 @@ bool fauxmoESP::_onTCPRequest(AsyncClient *client, bool isGet, String url, Strin
 
 }
 
+
 bool fauxmoESP::_onTCPData(AsyncClient *client, void *data, size_t len) {
 
     if (!_enabled) return false;
 
-	char * p = (char *) data;
-	p[len] = 0;
+    _tcpBuffer += String((char*)data, len);
 
-	#if DEBUG_FAUXMO_VERBOSE_TCP
-		DEBUG_MSG_FAUXMO("[FAUXMO] TCP request\n%s\n", p);
-	#endif
-
-	// Method is the first word of the request
-	char * method = p;
-
-	while (*p != ' ') p++;
-	*p = 0;
-	p++;
-	
-	// Split word and flag start of url
-	char * url = p;
-
-	// Find next space
-	while (*p != ' ') p++;
-	*p = 0;
-	p++;
-
-	// Find double line feed
-	unsigned char c = 0;
-	while ((*p != 0) && (c < 2)) {
-		if (*p != '\r') {
-			c = (*p == '\n') ? c + 1 : 0;
-		}
-		p++;
+    // Check if we have a complete request
+    int headerEnd = _tcpBuffer.indexOf("\r\n\r\n");
+    if (headerEnd == -1) { return false;  // Incomplete header 
 	}
-	char * body = p;
 
-	bool isGet = (strncmp(method, "GET", 3) == 0);
+    // Check for Content-Length
+    int contentLengthPos = _tcpBuffer.indexOf("Content-Length: ");
+    if (contentLengthPos != -1) {
+        int contentLengthEnd = _tcpBuffer.indexOf("\r\n", contentLengthPos);
+        int contentLength = _tcpBuffer.substring(contentLengthPos + 16, contentLengthEnd).toInt();
+        if (_tcpBuffer.length() < (unsigned int)(headerEnd + 4 + contentLength)) {
+            return false;  // Incomplete body
+        }
+    }
 
-	return _onTCPRequest(client, isGet, url, body);
+    // Parse the request
+    int methodEnd = _tcpBuffer.indexOf(' ');
+    int urlEnd = _tcpBuffer.indexOf(' ', methodEnd + 1);
+    
+    String method = _tcpBuffer.substring(0, methodEnd);
+    String url = _tcpBuffer.substring(methodEnd + 1, urlEnd);
+    String body = _tcpBuffer.substring(headerEnd + 4);
 
+    bool isGet = (method == "GET");
+    _tcpBuffer = "";  // Clear the buffer
+    return _onTCPRequest(client, isGet, url.c_str(), body.c_str());
 }
+
 
 void fauxmoESP::_onTCPClient(AsyncClient *client) {
 
