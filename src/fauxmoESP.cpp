@@ -118,7 +118,7 @@ String fauxmoESP::_deviceJson(unsigned char id, bool all = true) {
 	fauxmoesp_device_t device = _devices[id];
 
 	DEBUG_MSG_FAUXMO("[FAUXMO] Sending device info for \"%s\", uniqueID = \"%s\"\n", device.name, device.uniqueid);
-	char buffer[strlen_P(FAUXMO_DEVICE_JSON_TEMPLATE) + 64];
+	char buffer[strlen_P(FAUXMO_DEVICE_JSON_TEMPLATE) + 74];
 
 	if (all)
 	{
@@ -128,6 +128,8 @@ String fauxmoESP::_deviceJson(unsigned char id, bool all = true) {
 			device.name, device.uniqueid,
 			device.state ? "true": "false",
 			device.value,
+			device.x,
+			device.y,
 			device.colormode,
 			device.hue,
 			device.saturation,
@@ -383,10 +385,31 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 				_setRGBFromHSV(id);
 			}
 
+			// XY color coordinates
+			pos = body.indexOf("\"xy\"");
+			if (pos > 0) {
+				int startBracketPos = body.indexOf("[", pos);
+				int endBracketPos = body.indexOf("]", pos);
+				if (startBracketPos > pos && endBracketPos > startBracketPos)
+				{
+					String xyString = body.substring(startBracketPos + 1, endBracketPos);
+					int commaPos = xyString.indexOf(",");
+					if (commaPos > 0)
+					{
+						float x = xyString.substring(0, commaPos).toFloat();
+						float y = xyString.substring(commaPos + 1).toFloat();
+						DEBUG_MSG_FAUXMO("[FAUXMO] Setting xy to [%f, %f]\n", x, y);
+						_devices[id].x = x;
+						_devices[id].y = y;
+						strcpy(_devices[id].colormode, "xy");
+						_setRGBFromXY(id);
+					}
+				}
+			}
+
 			// Colour temperature
 			pos = body.indexOf("\"ct\"");
-			if (pos > 0)
-			{
+			if (pos > 0) {
 				unsigned int ct = body.substring(pos + 5).toInt();
 				DEBUG_MSG_FAUXMO("[FAUXMO] Setting ct to %d\n", ct);
 				_devices[id].ct = ct;
@@ -394,12 +417,17 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 				_setRGBFromCT(id);
 			}
 
-			char response[strlen_P(FAUXMO_TCP_STATE_RESPONSE)+23];
+			char response[strlen_P(FAUXMO_TCP_STATE_RESPONSE) + 34];
 			snprintf_P(
 				response, sizeof(response),
 				FAUXMO_TCP_STATE_RESPONSE,
-				id+1, _devices[id].state ? "true" : "false", id+1, _devices[id].value, id+1, _devices[id].hue, id+1, _devices[id].saturation, id+1, _devices[id].ct
-			);
+					id + 1, _devices[id].state ? "true" : "false",
+					id + 1, _devices[id].value,
+					id + 1, _devices[id].hue,
+					id + 1, _devices[id].saturation,
+					id + 1, _devices[id].ct,
+					id + 1, _devices[id].x, _devices[id].y);
+
 			_sendTCPResponse(client, "200 OK", response, "application/json");
 
 			if (_setCallback) {
@@ -619,6 +647,53 @@ void fauxmoESP::_setRGBFromHSV(unsigned char id)
 	_devices[id].blue = _devices[id].blue * dv;
 
  }
+
+
+void fauxmoESP::_setRGBFromXY(unsigned char id) {
+    // Assuming id is valid and within range
+
+    // Get xy values from the device
+    float x = _devices[id].x;
+    float y = _devices[id].y;
+    float Y = _devices[id].value; // Assuming brightness is stored in a property like this
+
+    // Handle edge cases for y
+    if (y == 0) {
+        _devices[id].red = 0;
+        _devices[id].green = 0;
+        _devices[id].blue = 0;
+        return;
+    }
+
+    // Calculate XYZ values
+    float X = (Y / y) * x;
+    float Z = (Y / y) * (1 - x - y);
+
+    // Convert XYZ to linear RGB
+    float r_linear = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
+    float g_linear = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
+    float b_linear = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
+
+    // Apply gamma correction and clamp the values to [0, 1]
+    float r = (r_linear > 0.0031308) ? (1.055 * pow(r_linear, 1.0 / 2.4) - 0.055) : (12.92 * r_linear);
+    float g = (g_linear > 0.0031308) ? (1.055 * pow(g_linear, 1.0 / 2.4) - 0.055) : (12.92 * g_linear);
+    float b = (b_linear > 0.0031308) ? (1.055 * pow(b_linear, 1.0 / 2.4) - 0.055) : (12.92 * b_linear);
+
+    // Clamp the RGB values to [0, 1]
+    r = fmax(0, fmin(r, 1));
+    g = fmax(0, fmin(g, 1));
+    b = fmax(0, fmin(b, 1));
+
+    // Convert to 0-255 range
+    _devices[id].red = static_cast<unsigned char>(r * 255.0);
+    _devices[id].green = static_cast<unsigned char>(g * 255.0);
+    _devices[id].blue = static_cast<unsigned char>(b * 255.0);
+
+    // Optional: Print the RGB values for debugging
+    // printf("RGB %d %d %d\n", _devices[id].red, _devices[id].green, _devices[id].blue);    
+}
+
+
 
 void fauxmoESP::_setRGBFromCT(unsigned char id) 
 {

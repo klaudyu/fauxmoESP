@@ -51,7 +51,7 @@ THE SOFTWARE.
 #endif
 
 #ifndef DEBUG_FAUXMO_VERBOSE_UDP
-#define DEBUG_FAUXMO_VERBOSE_UDP    true
+#define DEBUG_FAUXMO_VERBOSE_UDP    false
 #endif
 
 #include <Arduino.h>
@@ -84,6 +84,7 @@ typedef struct {
 	unsigned int hue;
     unsigned int saturation;
     unsigned int ct;
+    float x,y;
     char colormode[3];  // This might have to change to an enum 
     unsigned char red, green, blue;
 } fauxmoesp_device_t;
@@ -142,6 +143,7 @@ class fauxmoESP {
 		void _setRGBFromHSV(unsigned char id);
         void _adjustRGBFromValue(unsigned char id);
         void _setRGBFromCT(unsigned char id);
+        void _setRGBFromXY(unsigned char id);
 
         void _handleUDP();
         void _onUDPData(const IPAddress remoteIP, unsigned int remotePort, void *data, size_t len);
