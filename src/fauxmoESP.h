@@ -144,6 +144,7 @@ class fauxmoESP {
         void _adjustRGBFromValue(unsigned char id);
         void _setRGBFromCT(unsigned char id);
         void _setRGBFromXY(unsigned char id);
+        void _setHSVFromRGB(unsigned char id);
 
         void _handleUDP();
         void _onUDPData(const IPAddress remoteIP, unsigned int remotePort, void *data, size_t len);
