@@ -324,6 +324,50 @@ bool fauxmoESP::_onTCPList(AsyncClient *client, String url, String body) {
     return true;
 }
 
+void fauxmoESP::_setHSVFromRGB(unsigned char id) {
+    // Get RGB values from the device (assuming they're stored as 0-255)
+    float r = _devices[id].red / 255.0f;
+    float g = _devices[id].green / 255.0f;
+    float b = _devices[id].blue / 255.0f;
+
+    float max_val = max(max(r, g), b);
+    float min_val = min(min(r, g), b);
+    float delta = max_val - min_val;
+
+    // Calculate Hue
+    float hue;
+    if (delta == 0) {
+        hue = 0;  // Achromatic (gray)
+    } else if (max_val == r) {
+        hue = 60.0f * fmod(((g - b) / delta), 6.0f);
+    } else if (max_val == g) {
+        hue = 60.0f * (((b - r) / delta) + 2.0f);
+    } else {
+        hue = 60.0f * (((r - g) / delta) + 4.0f);
+    }
+
+    if (hue < 0) {
+        hue += 360.0f;
+    }
+
+	hue = (hue / 360.0f) * 65535.0f;
+
+    // Calculate Saturation
+    float saturation = (max_val == 0) ? 0 : (delta / max_val) * 255.0f;
+
+    // Calculate Value
+    //float value = max_val * 254.0f;
+
+    // Store the HSV values
+    _devices[id].hue = static_cast<unsigned int>(round(hue));
+    _devices[id].saturation = static_cast<unsigned int>(round(saturation));
+    //_devices[id].value = static_cast<unsigned int>(round(value));
+
+    DEBUG_MSG_FAUXMO("[FAUXMO] Set HSV to %u, %u, %u from RGB (%d, %d, %d)\n", 
+                     _devices[id].hue, _devices[id].saturation, _devices[id].value, 
+                     _devices[id].red, _devices[id].green, _devices[id].blue);
+}
+
 bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 
 	// "devicetype" request
@@ -403,6 +447,7 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 						_devices[id].y = y;
 						strcpy(_devices[id].colormode, "xy");
 						_setRGBFromXY(id);
+						_setHSVFromRGB(id);
 					}
 				}
 			}
@@ -648,51 +693,58 @@ void fauxmoESP::_setRGBFromHSV(unsigned char id)
 
  }
 
-
 void fauxmoESP::_setRGBFromXY(unsigned char id) {
-    // Assuming id is valid and within range
-
-    // Get xy values from the device
     float x = _devices[id].x;
     float y = _devices[id].y;
-    float Y = _devices[id].value; // Assuming brightness is stored in a property like this
+    float brightness = _devices[id].value / 255.0f;  // Assuming value is 0-255
 
-    // Handle edge cases for y
+    // Check if the color is valid
     if (y == 0) {
-        _devices[id].red = 0;
-        _devices[id].green = 0;
-        _devices[id].blue = 0;
-        return;
+        y += 0.00000000001f;
     }
 
-    // Calculate XYZ values
+    // Calculate XYZ
+    float z = 1.0f - x - y;
+    float Y = brightness;  // Y is the brightness
     float X = (Y / y) * x;
-    float Z = (Y / y) * (1 - x - y);
+    float Z = (Y / y) * z;
 
-    // Convert XYZ to linear RGB
-    float r_linear = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
-    float g_linear = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
-    float b_linear = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
+    // Convert to RGB using Wide RGB D65 conversion
+    float r = X * 1.656492f - Y * 0.354851f - Z * 0.255038f;
+    float g = -X * 0.707196f + Y * 1.655397f + Z * 0.036152f;
+    float b = X * 0.051713f - Y * 0.121364f + Z * 1.011530f;
 
-    // Apply gamma correction and clamp the values to [0, 1]
-    float r = (r_linear > 0.0031308) ? (1.055 * pow(r_linear, 1.0 / 2.4) - 0.055) : (12.92 * r_linear);
-    float g = (g_linear > 0.0031308) ? (1.055 * pow(g_linear, 1.0 / 2.4) - 0.055) : (12.92 * g_linear);
-    float b = (b_linear > 0.0031308) ? (1.055 * pow(b_linear, 1.0 / 2.4) - 0.055) : (12.92 * b_linear);
+    // Apply reverse gamma correction
+    r = (r <= 0.0031308f) ? 12.92f * r : (1.0f + 0.055f) * pow(r, (1.0f / 2.4f)) - 0.055f;
+    g = (g <= 0.0031308f) ? 12.92f * g : (1.0f + 0.055f) * pow(g, (1.0f / 2.4f)) - 0.055f;
+    b = (b <= 0.0031308f) ? 12.92f * b : (1.0f + 0.055f) * pow(b, (1.0f / 2.4f)) - 0.055f;
 
-    // Clamp the RGB values to [0, 1]
-    r = fmax(0, fmin(r, 1));
-    g = fmax(0, fmin(g, 1));
-    b = fmax(0, fmin(b, 1));
+    // Bring all negative components to zero
+    r = max(0.0f, r);
+    g = max(0.0f, g);
+    b = max(0.0f, b);
 
-    // Convert to 0-255 range
-    _devices[id].red = static_cast<unsigned char>(r * 255.0);
-    _devices[id].green = static_cast<unsigned char>(g * 255.0);
-    _devices[id].blue = static_cast<unsigned char>(b * 255.0);
+    // If one component is greater than 1, weight components by that value
+    float max_component = max(max(r, g), b);
+    if (max_component > 1.0f) {
+        r /= max_component;
+        g /= max_component;
+        b /= max_component;
+    }
 
-    // Optional: Print the RGB values for debugging
-    // printf("RGB %d %d %d\n", _devices[id].red, _devices[id].green, _devices[id].blue);    
+    // Apply brightness
+    //r *= brightness;
+    //g *= brightness;
+    //b *= brightness;
+
+    // Convert to 8-bit values
+    _devices[id].red = static_cast<uint8_t>(round(r * 255.0f));
+    _devices[id].green = static_cast<uint8_t>(round(g * 255.0f));
+    _devices[id].blue = static_cast<uint8_t>(round(b * 255.0f));
+
+    DEBUG_MSG_FAUXMO("[FAUXMO] Set RGB to %d, %d, %d from XY (%f, %f) and brightness %f\n", 
+                     _devices[id].red, _devices[id].green, _devices[id].blue, x, y, brightness);
 }
-
 
 
 void fauxmoESP::_setRGBFromCT(unsigned char id) 
