@@ -233,6 +233,8 @@ String fauxmoESP::_listConfig() {
     // Get MAC address
     String mac = WiFi.macAddress();
     mac.replace(":", "."); // Replace colons with dots to match the format in the original string
+	String bridgeid = "0071"+WiFi.macAddress();
+	bridgeid.replace(":", "");
 
     // Get IP address
     IPAddress ip = WiFi.localIP();
@@ -241,7 +243,7 @@ String fauxmoESP::_listConfig() {
     // Use a raw string literal for the JSON structure
     String response = R"({
         "name": "Hue Bridge",
-        "bridgeid": "001788FFFEB0E55D",
+        "bridgeid": ")" + bridgeid + R"(",
         "apiversion": "1.65.0",
         "swversion": "1965053020",
         "linkbutton": false,
