@@ -38,17 +38,13 @@ void fauxmoESP::_sendUDPResponse() {
 	DEBUG_MSG_FAUXMO("[FAUXMO] Responding to M-SEARCH request\n");
 
 	IPAddress ip = WiFi.localIP();
-    String mac = WiFi.macAddress();
-    mac.replace(":", "");
-    mac.toLowerCase();
-
 	char response[strlen(FAUXMO_UDP_RESPONSE_TEMPLATE) + 128];
     snprintf_P(
         response, sizeof(response),
         FAUXMO_UDP_RESPONSE_TEMPLATE,
         ip[0], ip[1], ip[2], ip[3],
 		_tcp_port,
-        mac.c_str(), mac.c_str()
+        bridgeid.c_str(), bridgeid.c_str()
     );
 
 	#if DEBUG_FAUXMO_VERBOSE_UDP
@@ -70,15 +66,33 @@ void fauxmoESP::enableMDNS(const char* name) {
 }
 
 void fauxmoESP::_startMDNS() {
+	//this makes the device recognizable by home assistant
     if (_mdns_name) {
+        //if (MDNS.begin(bridgeid.c_str())) {
         if (MDNS.begin(_mdns_name)) {
-            MDNS.addService("hue", "tcp", _tcp_port);
-            DEBUG_MSG_FAUXMO("[FAUXMO] mDNS started: %s.local\n", _mdns_name);
+            // Generate a fake bridge ID (last 6 bytes of MAC address)
+
+            // Set up the service
+            String serviceName = "Hue Bridge - " + bridgeid.substring(0,6);
+
+            // Add the service
+            MDNS.addService("_hue", "_tcp", 443); //this is actually not correct, but it still works in home assistant
+
+            // Add TXT records
+            MDNS.addServiceTxt("_hue", "_tcp", "modelid", "BSB002"); //not correct but works on home assistant
+            MDNS.addServiceTxt("_hue", "_tcp", "bridgeid", bridgeid);
+
+            // Set the instance name
+            MDNS.setInstanceName(serviceName.c_str());
+
+            DEBUG_MSG_FAUXMO("[FAUXMO] mDNS started: %s._hue._tcp.local\n", serviceName.c_str());
         } else {
             DEBUG_MSG_FAUXMO("[FAUXMO] Error setting up mDNS\n");
         }
     }
 }
+
+
 
 
 void fauxmoESP::_handleUDP() {
@@ -249,8 +263,6 @@ String fauxmoESP::_listConfig() {
     // Get MAC address
     String mac = WiFi.macAddress();
     mac.replace(":", "."); // Replace colons with dots to match the format in the original string
-	String bridgeid = "0071"+WiFi.macAddress();
-	bridgeid.replace(":", "");
 
     // Get IP address
     IPAddress ip = WiFi.localIP();
@@ -1009,6 +1021,10 @@ void fauxmoESP::enable(bool enable) {
 	} else {
 		DEBUG_MSG_FAUXMO("[FAUXMO] Disabled\n");
 	}
+
+	bridgeid = "0017"+WiFi.macAddress();
+    bridgeid.replace(":", "");
+    bridgeid.toLowerCase();
 
     if (_enabled) {
 
