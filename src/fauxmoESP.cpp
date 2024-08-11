@@ -65,6 +65,22 @@ void fauxmoESP::_sendUDPResponse() {
 
 }
 
+void fauxmoESP::enableMDNS(const char* name) {
+    _mdns_name = name;
+}
+
+void fauxmoESP::_startMDNS() {
+    if (_mdns_name) {
+        if (MDNS.begin(_mdns_name)) {
+            MDNS.addService("hue", "tcp", _tcp_port);
+            DEBUG_MSG_FAUXMO("[FAUXMO] mDNS started: %s.local\n", _mdns_name);
+        } else {
+            DEBUG_MSG_FAUXMO("[FAUXMO] Error setting up mDNS\n");
+        }
+    }
+}
+
+
 void fauxmoESP::_handleUDP() {
 
 	int len = _udp.parsePacket();
@@ -1014,6 +1030,7 @@ void fauxmoESP::enable(bool enable) {
             _udp.beginMulticast(WiFi.localIP(), FAUXMO_UDP_MULTICAST_IP, FAUXMO_UDP_MULTICAST_PORT);
         #endif
         DEBUG_MSG_FAUXMO("[FAUXMO] UDP server started\n");
+		_startMDNS();
 
 	}
 

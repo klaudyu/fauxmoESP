@@ -35,6 +35,16 @@ THE SOFTWARE.
 #define FAUXMO_RX_TIMEOUT           3
 #define FAUXMO_DEVICE_UNIQUE_ID_LENGTH  27
 
+#if defined(ESP8266)
+    #include <ESP8266mDNS.h>
+#elif defined(ESP32)
+    #include <ESPmDNS.h>
+#elif defined(ARDUINO_RASPBERRY_PI_PICO_W)
+    #include <LEAmDNS.h>
+#else
+    #error Platform not supported
+#endif
+
 #define DEBUG_FAUXMO                Serial
 #ifdef DEBUG_FAUXMO
     #if defined(ARDUINO_ARCH_ESP32)
@@ -122,6 +132,7 @@ class fauxmoESP {
         void createServer(bool internal) { _internal = internal; }
         void setPort(unsigned long tcp_port) { _tcp_port = tcp_port; }
         void handle();
+        void enableMDNS(const char *name);
 
     private:
 
@@ -164,4 +175,6 @@ class fauxmoESP {
 
         String _byte2hex(uint8_t zahl);
         String _makeMD5(String text);
+        const char *_mdns_name = nullptr;
+        void _startMDNS();
 };
