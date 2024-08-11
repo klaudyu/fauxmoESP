@@ -150,6 +150,8 @@ class fauxmoESP {
         TSetStateCallback _setCallback = NULL;
 
         String _deviceJson(unsigned char id, bool all); 	// all = true means we are listing all devices so use full description template
+
+        String bridgeid; 
 		
 		void _setRGBFromHSV(unsigned char id);
         void _adjustRGBFromValue(unsigned char id);
