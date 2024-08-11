@@ -70,7 +70,6 @@ void fauxmoESP::_startMDNS() {
     if (_mdns_name) {
         //if (MDNS.begin(bridgeid.c_str())) {
         if (MDNS.begin(_mdns_name)) {
-            // Generate a fake bridge ID (last 6 bytes of MAC address)
 
             // Set up the service
             String serviceName = "Hue Bridge - " + bridgeid.substring(0,6);
