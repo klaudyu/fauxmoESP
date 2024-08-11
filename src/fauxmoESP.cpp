@@ -72,13 +72,34 @@ void fauxmoESP::enableMDNS(const char* name) {
 void fauxmoESP::_startMDNS() {
     if (_mdns_name) {
         if (MDNS.begin(_mdns_name)) {
-            MDNS.addService("hue", "tcp", _tcp_port);
-            DEBUG_MSG_FAUXMO("[FAUXMO] mDNS started: %s.local\n", _mdns_name);
+            // Generate a fake bridge ID (last 6 bytes of MAC address)
+            uint8_t mac[6];
+            WiFi.macAddress(mac);
+            char bridgeId[13];
+            sprintf(bridgeId, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+            // Set up the service
+            char serviceName[64];
+            sprintf(serviceName, "Hue Bridge - %s", bridgeId);
+
+            // Add the service
+            MDNS.addService("_hue", "_tcp", 443);
+
+            // Add TXT records
+            MDNS.addServiceTxt("_hue", "_tcp", "bridgeid", bridgeId);
+            MDNS.addServiceTxt("_hue", "_tcp", "modelid", "BSB001");
+
+            // Set the instance name
+            MDNS.setInstanceName(serviceName);
+
+            DEBUG_MSG_FAUXMO("[FAUXMO] mDNS started: %s._hue._tcp.local\n", serviceName);
         } else {
             DEBUG_MSG_FAUXMO("[FAUXMO] Error setting up mDNS\n");
         }
     }
 }
+
+
 
 
 void fauxmoESP::_handleUDP() {
