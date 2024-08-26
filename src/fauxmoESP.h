@@ -45,7 +45,8 @@ THE SOFTWARE.
     #error Platform not supported
 #endif
 
-#define DEBUG_FAUXMO                Serial
+//#define DEBUG_FAUXMO                Serial
+
 #ifdef DEBUG_FAUXMO
     #if defined(ARDUINO_ARCH_ESP32)
         #define DEBUG_MSG_FAUXMO(fmt, ...) { DEBUG_FAUXMO.printf_P((PGM_P) PSTR(fmt), ## __VA_ARGS__); }
@@ -84,7 +85,7 @@ THE SOFTWARE.
 #include <MD5Builder.h>
 #include "templates.h"
 
-typedef std::function<void(unsigned char, const char *, bool, unsigned char, unsigned int, unsigned int, unsigned int)> TSetStateCallback;
+
 
 typedef struct {
     char * name;
@@ -99,6 +100,9 @@ typedef struct {
     unsigned char red, green, blue;
 } fauxmoesp_device_t;
 
+typedef std::function<void(unsigned char, const char *, bool, unsigned char, unsigned int, unsigned int, unsigned int)> TSetStateCallback;
+typedef std::function<void(unsigned char, const fauxmoesp_device_t*)> TSetStateCallbackObject;
+
 class fauxmoESP {
 
     public:
@@ -112,8 +116,10 @@ class fauxmoESP {
         bool removeDevice(const char * device_name);
         char * getDeviceName(unsigned char id, char * buffer, size_t len);
         int getDeviceId(const char * device_name);
+        const fauxmoesp_device_t* getDevice(unsigned char id) const ;
         void setDeviceUniqueId(unsigned char id, const char *uniqueid);
-        void onSetState(TSetStateCallback fn) { _setCallback = fn; }
+        void onSetState(TSetStateCallback fn) { _setCallback = fn; _setCallbackObject = nullptr; }
+        void onSetState(TSetStateCallbackObject fn) { _setCallbackObject = fn; _setCallback = nullptr; }
         bool setState(unsigned char id, bool state, unsigned char value);
         bool setState(const char * device_name, bool state, unsigned char value);
 		
@@ -122,9 +128,15 @@ class fauxmoESP {
         bool setState(unsigned char id, bool state, unsigned int ct);
         bool setState(const char * device_name, bool state, unsigned int ct);
 
-        uint8_t getRed(unsigned char id);
-        uint8_t getGreen(unsigned char id);
-        uint8_t getBlue(unsigned char id);
+        uint8_t getRed(unsigned char id) { return _devices[id].red; }
+        uint8_t getGreen(unsigned char id) { return _devices[id].green; }
+        uint8_t getBlue(unsigned char id) { return _devices[id].blue; }
+
+        unsigned char getBrightness(unsigned char id) { return _devices[id].value; }
+        float getX(unsigned char id) { return _devices[id].x; }
+        float getY(unsigned char id) { return _devices[id].y; }
+
+
         char * getColormode(unsigned char id, char * buffer, size_t len);
 		
         bool process(AsyncClient *client, bool isGet, String url, String body);
@@ -148,6 +160,8 @@ class fauxmoESP {
         WiFiUDP _udp;
         AsyncClient * _tcpClients[FAUXMO_TCP_MAX_CLIENTS];
         TSetStateCallback _setCallback = NULL;
+        TSetStateCallbackObject _setCallbackObject = nullptr;
+
 
         String _deviceJson(unsigned char id, bool all); 	// all = true means we are listing all devices so use full description template
 

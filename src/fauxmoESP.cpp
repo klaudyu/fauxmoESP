@@ -65,6 +65,13 @@ void fauxmoESP::enableMDNS(const char* name) {
     _mdns_name = name;
 }
 
+const fauxmoesp_device_t* fauxmoESP::getDevice(unsigned char id) const {
+    if (id < _devices.size()) {
+        return &_devices[id];
+    }
+    return nullptr;
+}
+
 void fauxmoESP::_startMDNS() {
 	//this makes the device recognizable by home assistant
     if (_mdns_name) {
@@ -446,6 +453,7 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 				DEBUG_MSG_FAUXMO("[FAUXMO] Setting hue to %d\n", hue);
 				_devices[id].hue = hue;
 				strcpy(_devices[id].colormode, "hs");
+				_setRGBFromHSV(id);
 			}
 
 			pos = body.indexOf("\"sat\"");
@@ -504,9 +512,11 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 
 			_sendTCPResponse(client, "200 OK", response, "application/json");
 
-			if (_setCallback) {
-				_setCallback(id, _devices[id].name, _devices[id].state, _devices[id].value, _devices[id].hue, _devices[id].saturation, _devices[id].ct);
-			}
+        if (_setCallbackObject) {
+            _setCallbackObject(id, &_devices[id]);
+        } else if (_setCallback) {
+            _setCallback(id, _devices[id].name, _devices[id].state, _devices[id].value, _devices[id].hue, _devices[id].saturation, _devices[id].ct);
+        }
 
 			return true;
 
@@ -924,20 +934,6 @@ char * fauxmoESP::getColormode(unsigned char id, char * cm, size_t len)
 	return cm;
 }
 
-uint8_t fauxmoESP::getRed(unsigned char id)
-{
-	return _devices[id].red;
-}
-
-uint8_t fauxmoESP::getGreen(unsigned char id)
-{
-	return _devices[id].green;
-}
-
-uint8_t fauxmoESP::getBlue(unsigned char id)
-{
-	return _devices[id].blue;
-}
 
 // For on/off and Brightness
 
