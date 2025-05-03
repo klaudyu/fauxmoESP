@@ -591,65 +591,62 @@ bool fauxmoESP::_onTCPData(AsyncClient *client, void *data, size_t len) {
 }
 
 
+//updated by chatgpt
+
 void fauxmoESP::_onTCPClient(AsyncClient *client) {
+    if (!_enabled) {
+        DEBUG_MSG_FAUXMO("[FAUXMO] Rejecting client - Disabled\n");
+        client->close(true);
+        return;
+    }
 
-	if (_enabled) {
+    // Prevent duplicate client assignment
+    for (uint8_t i = 0; i < FAUXMO_TCP_MAX_CLIENTS; i++) {
+        if (_tcpClients[i] == client) {
+            DEBUG_MSG_FAUXMO("[FAUXMO] Duplicate client ignored\n");
+            return;
+        }
+    }
 
-	    for (unsigned char i = 0; i < FAUXMO_TCP_MAX_CLIENTS; i++) {
+    for (uint8_t i = 0; i < FAUXMO_TCP_MAX_CLIENTS; i++) {
+        if (!_tcpClients[i] || !_tcpClients[i]->connected()) {
+            _tcpClients[i] = client;
 
-	        if (!_tcpClients[i] || !_tcpClients[i]->connected()) {
+            client->onAck([i](void *s, AsyncClient *c, size_t len, uint32_t time) {}, 0);
+            client->onData([this, i](void *s, AsyncClient *c, void *data, size_t len) {
+                _onTCPData(c, data, len);
+            }, 0);
+            client->onDisconnect([this, i](void *s, AsyncClient *c) {
+                if (_tcpClients[i]) {
+                    _tcpClients[i]->free();
+                    _tcpClients[i] = nullptr;
+                }
+                delete c;
+                DEBUG_MSG_FAUXMO("[FAUXMO] Client #%d disconnected\n", i);
+            }, 0);
+            client->onError([i](void *s, AsyncClient *c, int8_t error) {
+                DEBUG_MSG_FAUXMO("[FAUXMO] Error on client #%d: %s (%d)\n", i, c->errorToString(error), error);
+            }, 0);
+            client->onTimeout([i](void *s, AsyncClient *c, uint32_t time) {
+                DEBUG_MSG_FAUXMO("[FAUXMO] Timeout on client #%d after %u ms\n", i, time);
+                c->close();
+            }, 0);
+            client->setRxTimeout(FAUXMO_RX_TIMEOUT);
 
-	            _tcpClients[i] = client;
+            DEBUG_MSG_FAUXMO("[FAUXMO] Client #%d connected\n", i);
+            return;
+        }
+    }
 
-	            client->onAck([i](void *s, AsyncClient *c, size_t len, uint32_t time) {
-	            }, 0);
-
-	            client->onData([this, i](void *s, AsyncClient *c, void *data, size_t len) {
-	                _onTCPData(c, data, len);
-	            }, 0);
-	            client->onDisconnect([this, i](void *s, AsyncClient *c) {
-			if(_tcpClients[i] != NULL) {
-	                    _tcpClients[i]->free();
-	                    _tcpClients[i] = NULL;
-	                }
-			else {
-	                    DEBUG_MSG_FAUXMO("[FAUXMO] Client %d already disconnected\n", i);
-	                }
-	                delete c;
-	                DEBUG_MSG_FAUXMO("[FAUXMO] Client #%d disconnected\n", i);
-	            }, 0);
-
-	            client->onError([i](void *s, AsyncClient *c, int8_t error) {
-	                DEBUG_MSG_FAUXMO("[FAUXMO] Error %s (%d) on client #%d\n", c->errorToString(error), error, i);
-	            }, 0);
-
-	            client->onTimeout([i](void *s, AsyncClient *c, uint32_t time) {
-	                DEBUG_MSG_FAUXMO("[FAUXMO] Timeout on client #%d at %i\n", i, time);
-	                c->close();
-	            }, 0);
-
-                    client->setRxTimeout(FAUXMO_RX_TIMEOUT);
-
-	            DEBUG_MSG_FAUXMO("[FAUXMO] Client #%d connected\n", i);
-	            return;
-
-	        }
-
-	    }
-
-		DEBUG_MSG_FAUXMO("[FAUXMO] Rejecting - Too many connections\n");
-
-	} else {
-		DEBUG_MSG_FAUXMO("[FAUXMO] Rejecting - Disabled\n");
-	}
-
+    DEBUG_MSG_FAUXMO("[FAUXMO] Too many clients. Rejecting connection.\n");
     client->onDisconnect([](void *s, AsyncClient *c) {
         c->free();
         delete c;
     });
     client->close(true);
-
 }
+
+//end updated by chatgpt
 
 void fauxmoESP::_adjustRGBFromValue(unsigned char id) 
 {
@@ -832,16 +829,18 @@ void fauxmoESP::_setRGBFromCT(unsigned char id)
 // -----------------------------------------------------------------------------
 
 fauxmoESP::~fauxmoESP() {
-  	
-	// Free the name for each device
-	for (auto& device : _devices) {
-		free(device.name);
-  	}
-  	
-	// Delete devices  
-	_devices.clear();
+    for (auto &device : _devices) {
+        free(device.name);
+    }
+    _devices.clear();
 
+    // SAFER: cleanup AsyncServer
+    if (_server) {
+        delete _server;
+        _server = nullptr;
+    }
 }
+
 
 void fauxmoESP::setDeviceUniqueId(unsigned char id, const char *uniqueid)
 {
