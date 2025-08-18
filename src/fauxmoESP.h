@@ -145,6 +145,9 @@ class fauxmoESP {
         void setPort(unsigned long tcp_port) { _tcp_port = tcp_port; }
         void handle();
         void enableMDNS(const char *name);
+		// notify connected clients about a light state (by id or by name)
+		void notifyState(unsigned char id);
+		void notifyState(const char * device_name);
 
     private:
 
