@@ -127,6 +127,8 @@ class fauxmoESP {
         bool setState(const char * device_name, bool state, unsigned int hue, unsigned int saturation);
         bool setState(unsigned char id, bool state, unsigned int ct);
         bool setState(const char * device_name, bool state, unsigned int ct);
+		bool setState(unsigned char id, bool state);
+        bool setState(const char * device_name, bool state);
 
         uint8_t getRed(unsigned char id) { return _devices[id].red; }
         uint8_t getGreen(unsigned char id) { return _devices[id].green; }

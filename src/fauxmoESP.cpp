@@ -994,6 +994,22 @@ bool fauxmoESP::setState(const char * device_name, bool state, unsigned char val
 	return true;
 }
 
+
+bool fauxmoESP::setState(unsigned char id, bool state) {
+    if (id < _devices.size()) {
+		_devices[id].state = state;
+		return true;
+	}
+	return false;
+}
+
+bool fauxmoESP::setState(const char * device_name, bool state) {
+	int id = getDeviceId(device_name);
+	if (id < 0) return false;
+	_devices[id].state = state;
+	return true;
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -1046,30 +1062,29 @@ void fauxmoESP::enable(bool enable) {
 
 }
 
+// Notify all connected TCP clients with the current state of device `id`
 void fauxmoESP::notifyState(unsigned char id) {
     if (id >= _devices.size()) return;
 
-    // build body
+    // Build JSON body using the same template used for control responses
     char body[sizeof(FAUXMO_TCP_STATE_RESPONSE) + 128];
-    snprintf_P(body, sizeof(body),
+    snprintf_P(
+        body, sizeof(body),
         FAUXMO_TCP_STATE_RESPONSE,
-        id + 1, _devices[id].state ? "true" : "false",
-        id + 1, _devices[id].value,
-        id + 1, _devices[id].hue,
-        id + 1, _devices[id].saturation,
-        id + 1, _devices[id].ct,
-        id + 1, _devices[id].x, _devices[id].y);
+            id + 1, _devices[id].state ? "true" : "false",
+            id + 1, _devices[id].value,
+            id + 1, _devices[id].hue,
+            id + 1, _devices[id].saturation,
+            id + 1, _devices[id].ct,
+            id + 1, _devices[id].x, _devices[id].y);
 
-    // build headers
-    char headers[128];
-    snprintf_P(headers, sizeof(headers), FAUXMO_TCP_HEADERS, "200 OK", "application/json", (int)strlen(body));
-
-    // send to all connected clients
+    // Send the state JSON as a 200 OK response to every connected TCP client
     for (uint8_t i = 0; i < FAUXMO_TCP_MAX_CLIENTS; ++i) {
         AsyncClient *c = _tcpClients[i];
         if (c && c->connected()) {
-            c->write(headers);
-            c->write(body);
+            // _sendTCPResponse expects (AsyncClient*, code, body, mime)
+            // body must be a char*, which `body` is
+            _sendTCPResponse(c, "200 OK", body, "application/json");
         }
     }
 }
