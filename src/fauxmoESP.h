@@ -45,7 +45,7 @@ THE SOFTWARE.
     #error Platform not supported
 #endif
 
-#define DEBUG_FAUXMO                Serial
+//#define DEBUG_FAUXMO                Serial
 
 #ifdef DEBUG_FAUXMO
     #if defined(ARDUINO_ARCH_ESP32)
