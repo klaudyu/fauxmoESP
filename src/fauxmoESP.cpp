@@ -2,7 +2,7 @@
 
 FAUXMO ESP
 
-Copyright (C) 2016-2020 by Xose Pérez <xose dot perez at gmail dot com>, 2020-2021 by Paul Vint <paul@vintlabs.com>
+Copyright (C) 2016-2020 by Xose PÃ©rez <xose dot perez at gmail dot com>, 2020-2021 by Paul Vint <paul@vintlabs.com>
 
 The MIT License (MIT)
 
@@ -38,7 +38,7 @@ void fauxmoESP::_sendUDPResponse() {
 	DEBUG_MSG_FAUXMO("[FAUXMO] Responding to M-SEARCH request\n");
 
 	IPAddress ip = WiFi.localIP();
-	char response[strlen(FAUXMO_UDP_RESPONSE_TEMPLATE) + 128];
+	char response[strlen_P(FAUXMO_UDP_RESPONSE_TEMPLATE) + 128];
     snprintf_P(
         response, sizeof(response),
         FAUXMO_UDP_RESPONSE_TEMPLATE,
@@ -98,9 +98,6 @@ void fauxmoESP::_startMDNS() {
     }
 }
 
-
-
-
 void fauxmoESP::_handleUDP() {
 
 	int len = _udp.parsePacket();
@@ -147,14 +144,16 @@ void fauxmoESP::_sendTCPResponse(AsyncClient *client, const char * code, char * 
 
 }
 
-String fauxmoESP::_deviceJson(unsigned char id, bool all = true) {
+String fauxmoESP::_deviceJson(unsigned char id, bool all) {
 
 	if (id >= _devices.size()) return "{}";
 
 	fauxmoesp_device_t device = _devices[id];
 
 	DEBUG_MSG_FAUXMO("[FAUXMO] Sending device info for \"%s\", uniqueID = \"%s\"\n", device.name, device.uniqueid);
-	char buffer[strlen_P(FAUXMO_DEVICE_JSON_TEMPLATE) + 74];
+	
+	// Increased buffer size to prevent overflow
+	char buffer[strlen_P(FAUXMO_DEVICE_JSON_TEMPLATE) + 200];
 
 	if (all)
 	{
@@ -241,7 +240,7 @@ bool fauxmoESP::_onTCPDescription(AsyncClient *client, String url, String body) 
 }
 
 // New function to generate lights JSON
-String fauxmoESP::_listLightsJson(unsigned char id = 0) {
+String fauxmoESP::_listLightsJson(unsigned char id) {
     String response;
     
     // If id is 0, return all lights
@@ -319,48 +318,79 @@ String fauxmoESP::_listGroups() {
 	return response;
 }
 
-// Updated _onTCPList function
 bool fauxmoESP::_onTCPList(AsyncClient *client, String url, String body) {
-    DEBUG_MSG_FAUXMO("[FAUXMO] Handling list request\n");
+    DEBUG_MSG_FAUXMO("[FAUXMO] Handling list request for URL: %s\n", url.c_str());
 
-    // Prepare the response string
     String response;
-	bool option_set=false;
+    bool option_set = false;
 
-	// Check for groups request
+    // Check for groups request
     int pos = url.indexOf("groups");
     if (pos != -1) {
-		response=_listGroups();
-		option_set=true;
+        response = _listGroups();
+        option_set = true;
+    }
+
+    // Check for sensors request - this is crucial for Home Assistant discovery
+    pos = url.indexOf("sensors");
+    if (pos != -1) {
+        // Extract sensor ID if present (e.g., /api/sensors/1)
+        unsigned char id = 0;
+        if (pos + 8 < url.length()) {
+            String idStr = url.substring(pos + 8);
+            if (idStr.startsWith("/")) {
+                idStr = idStr.substring(1);
+            }
+            id = idStr.toInt();
+        }
+        response = _sensorsJson(id);
+        option_set = true;
+        DEBUG_MSG_FAUXMO("[FAUXMO] Returning sensors JSON (id=%d): %s\n", id, response.c_str());
     }
 
     // Check for config request
     pos = url.indexOf("config");
     if (pos != -1) {
-		response=_listConfig();
-		option_set=true;
+        response = _listConfig();
+        option_set = true;
     }
 
     // Check for lights request
     pos = url.indexOf("lights");
-    // If "lights" is not in the URL, or if it's at the end of the URL (no ID specified)
-    if (pos != -1){
-        unsigned char id = url.substring(pos+7).toInt();
+    if (pos != -1) {
+        unsigned char id = 0;
+        if (pos + 7 < url.length()) {
+            String idStr = url.substring(pos + 7);
+            if (idStr.startsWith("/")) {
+                idStr = idStr.substring(1);
+            }
+            id = idStr.toInt();
+        }
         response = _listLightsJson(id);
-		option_set=true;
-	}
+        option_set = true;
+    }
 
-	if(!option_set){
-		response = "{\"lights\":" + _listLightsJson() +",\"config\":"+_listConfig()+ 
-		",\"groups\":"+ _listGroups() + 	"}";
-	};
+    // If no specific endpoint was requested, return the full API structure
+    // This is what Home Assistant typically calls first: GET /api/
+    if (!option_set) {
+		
+        response = "{\"lights\":" + _listLightsJson(0) + 
+                  ",\"groups\":" + _listGroups() + 
+                  ",\"config\":" + _listConfig() + 
+                  ",\"sensors\":" + _sensorsJson(0) +  // This line was potentially missing sensors!
+                  ",\"scenes\":{},\"schedules\":{},\"rules\":{}" +
+                  "}";
+        DEBUG_MSG_FAUXMO("[FAUXMO] Returning full API structure with sensors\n");
+    }
 
     _sendTCPResponse(client, "200 OK", (char *) response.c_str(), "application/json");
-    
     return true;
 }
 
 void fauxmoESP::_setHSVFromRGB(unsigned char id) {
+    // Check bounds
+    if (id >= _devices.size()) return;
+    
     // Get RGB values from the device (assuming they're stored as 0-255)
     float r = _devices[id].red / 255.0f;
     float g = _devices[id].green / 255.0f;
@@ -427,6 +457,9 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 		if (id > 0) {
 
 			--id;
+
+			// Check bounds after decrementing
+			if (id >= _devices.size()) return false;
 
 			// Brightness
 			pos = body.indexOf("bri");
@@ -560,33 +593,37 @@ bool fauxmoESP::_onTCPData(AsyncClient *client, void *data, size_t len) {
 
     if (!_enabled) return false;
 
-    _tcpBuffer += String((char*)data, len);
+    int idx = -1;
+    for (uint8_t i = 0; i < FAUXMO_TCP_MAX_CLIENTS; ++i) if (_tcpClients[i] == client) { idx = i; break; }
+    if (idx < 0) return false;
+
+    _tcpBuffers[idx] += String((char*)data, len);
 
     // Check if we have a complete request
-    int headerEnd = _tcpBuffer.indexOf("\r\n\r\n");
+    int headerEnd = _tcpBuffers[idx].indexOf("\r\n\r\n");
     if (headerEnd == -1) { return false;  // Incomplete header 
 	}
 
     // Check for Content-Length
-    int contentLengthPos = _tcpBuffer.indexOf("Content-Length: ");
+    int contentLengthPos = _tcpBuffers[idx].indexOf("Content-Length: ");
     if (contentLengthPos != -1) {
-        int contentLengthEnd = _tcpBuffer.indexOf("\r\n", contentLengthPos);
-        int contentLength = _tcpBuffer.substring(contentLengthPos + 16, contentLengthEnd).toInt();
-        if (_tcpBuffer.length() < (unsigned int)(headerEnd + 4 + contentLength)) {
+        int contentLengthEnd = _tcpBuffers[idx].indexOf("\r\n", contentLengthPos);
+        int contentLength = _tcpBuffers[idx].substring(contentLengthPos + 16, contentLengthEnd).toInt();
+        if (_tcpBuffers[idx].length() < (unsigned int)(headerEnd + 4 + contentLength)) {
             return false;  // Incomplete body
         }
     }
 
     // Parse the request
-    int methodEnd = _tcpBuffer.indexOf(' ');
-    int urlEnd = _tcpBuffer.indexOf(' ', methodEnd + 1);
+    int methodEnd = _tcpBuffers[idx].indexOf(' ');
+    int urlEnd = _tcpBuffers[idx].indexOf(' ', methodEnd + 1);
     
-    String method = _tcpBuffer.substring(0, methodEnd);
-    String url = _tcpBuffer.substring(methodEnd + 1, urlEnd);
-    String body = _tcpBuffer.substring(headerEnd + 4);
+    String method = _tcpBuffers[idx].substring(0, methodEnd);
+    String url = _tcpBuffers[idx].substring(methodEnd + 1, urlEnd);
+    String body = _tcpBuffers[idx].substring(headerEnd + 4);
 
     bool isGet = (method == "GET");
-    _tcpBuffer = "";  // Clear the buffer
+    _tcpBuffers[idx] = "";  // Clear the buffer
     return _onTCPRequest(client, isGet, url.c_str(), body.c_str());
 }
 
@@ -650,7 +687,8 @@ void fauxmoESP::_onTCPClient(AsyncClient *client) {
 
 void fauxmoESP::_adjustRGBFromValue(unsigned char id) 
 {
-	if (id < 0) 
+	// Check bounds
+	if (id >= _devices.size()) 
 		return;
 
 	// Get the greatest of the RGB values
@@ -660,9 +698,9 @@ void fauxmoESP::_adjustRGBFromValue(unsigned char id)
 	if (largest > 0)
 	{
 		float factor = (float) _devices[id].value / (float) largest;
-		_devices[id].red *= factor;
-		_devices[id].green *= factor;
-		_devices[id].blue *= factor;
+		_devices[id].red   = (uint8_t)min(255.0f, _devices[id].red   * factor);
+		_devices[id].green = (uint8_t)min(255.0f, _devices[id].green * factor);
+		_devices[id].blue  = (uint8_t)min(255.0f, _devices[id].blue  * factor);
 	}
 	else
 	{
@@ -674,7 +712,8 @@ void fauxmoESP::_adjustRGBFromValue(unsigned char id)
 
 void fauxmoESP::_setRGBFromHSV(unsigned char id) 
 {
-	if (id < 0) 
+	// Check bounds
+	if (id >= _devices.size()) 
 		return;
 
 	float dh, ds, dv;
@@ -730,6 +769,9 @@ void fauxmoESP::_setRGBFromHSV(unsigned char id)
  }
 
 void fauxmoESP::_setRGBFromXY(unsigned char id) {
+    // Check bounds
+    if (id >= _devices.size()) return;
+    
     float x = _devices[id].x;
     float y = _devices[id].y;
     float brightness = _devices[id].value / 255.0f;  // Assuming value is 0-255
@@ -785,7 +827,8 @@ void fauxmoESP::_setRGBFromXY(unsigned char id) {
 
 void fauxmoESP::_setRGBFromCT(unsigned char id) 
 {
-	if (id < 0) 
+	// Check bounds
+	if (id >= _devices.size()) 
 		return;
 
 	float temp = 10000.0 / _devices[id].ct;
@@ -829,10 +872,21 @@ void fauxmoESP::_setRGBFromCT(unsigned char id)
 // -----------------------------------------------------------------------------
 
 fauxmoESP::~fauxmoESP() {
+    // Free device names
     for (auto &device : _devices) {
-        free(device.name);
+        if (device.name) {
+            free(device.name);
+        }
     }
     _devices.clear();
+
+    // Free sensor names
+    for (auto &sensor : _sensors) {
+        if (sensor.name) {
+            free(sensor.name);
+        }
+    }
+    _sensors.clear();
 
     // SAFER: cleanup AsyncServer
     if (_server) {
@@ -844,7 +898,10 @@ fauxmoESP::~fauxmoESP() {
 
 void fauxmoESP::setDeviceUniqueId(unsigned char id, const char *uniqueid)
 {
-    strncpy(_devices[id].uniqueid, uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH);
+    if (id < _devices.size()) {
+        strncpy(_devices[id].uniqueid, uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH);
+        _devices[id].uniqueid[FAUXMO_DEVICE_UNIQUE_ID_LENGTH - 1] = '\0'; // Ensure null termination
+    }
 }
 
 unsigned char fauxmoESP::addDevice(const char * device_name) {
@@ -860,11 +917,14 @@ unsigned char fauxmoESP::addDevice(const char * device_name) {
 	device.saturation = 0;
 	device.ct = 500;
 	strcpy(device.colormode, "hs");
+	device.x = 0.3127f;
+	device.y = 0.3290f;
+	device.red = device.green = device.blue = 0;
 
     // create the uniqueid
     String mac = WiFi.macAddress();
 
-    snprintf(device.uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH, "%s:%s-%02X", mac.c_str(), "00:00", device_id);
+    snprintf(device.uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH, "%s:%s-%02X", mac.c_str(), "00:11", device_id);
 
     // Attach
     _devices.push_back(device);
@@ -874,6 +934,215 @@ unsigned char fauxmoESP::addDevice(const char * device_name) {
     return device_id;
 
 }
+
+/*** --- Sensors implementation --- ***/
+
+const char* fauxmoESP::_sensorTypeName(fauxmo_sensor_type_t t) {
+    switch (t) {
+    case SENSOR_PRESENCE:    return "ZLLPresence";
+    case SENSOR_TEMPERATURE: return "ZLLTemperature";  
+    case SENSOR_LIGHTLEVEL:  return "ZLLLightLevel";
+    default:                 return "ZHASensor";
+    }
+}
+
+unsigned char fauxmoESP::addPresenceSensor(const char *name) {
+    fauxmoesp_sensor_t s{};
+    s.name = strdup(name);
+    s.type = SENSOR_PRESENCE;
+    s.reachable = true;
+    String mac = WiFi.macAddress();
+    snprintf(s.uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH, "%s:%s-%02X", mac.c_str(), "22:00", (unsigned)_sensors.size());
+    _sensors.push_back(s);
+    return _sensors.size() - 1;
+}
+
+unsigned char fauxmoESP::addTemperatureSensor(const char *name) {
+    fauxmoesp_sensor_t s{};
+    s.name = strdup(name);
+    s.type = SENSOR_TEMPERATURE;
+    s.reachable = true;
+    String mac = WiFi.macAddress();
+    snprintf(s.uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH, "%s:%s-%02X", mac.c_str(), "33:00", (unsigned)_sensors.size());
+    _sensors.push_back(s);
+    return _sensors.size() - 1;
+}
+
+unsigned char fauxmoESP::addLightLevelSensor(const char *name) {
+    fauxmoesp_sensor_t s{};
+    s.name = strdup(name);
+    s.type = SENSOR_LIGHTLEVEL;
+    s.reachable = true;
+    String mac = WiFi.macAddress();
+    snprintf(s.uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH, "%s:%s-%02X", mac.c_str(), "44:00", (unsigned)_sensors.size());
+    _sensors.push_back(s);
+    return _sensors.size() - 1;
+}
+
+void fauxmoESP::setPresence(unsigned char id, bool present, bool notify) {
+    if (id >= _sensors.size()) return;
+    _sensors[id].presence = present;
+    if (notify) notifySensor(id);
+}
+
+void fauxmoESP::setTemperatureC(unsigned char id, float celsius, bool notify) {
+    if (id >= _sensors.size()) return;
+    _sensors[id].temperature = (int32_t)roundf(celsius * 100.0f);
+    if (notify) notifySensor(id);
+}
+
+void fauxmoESP::setLightLevel(unsigned char id, uint32_t level, bool notify) {
+    if (id >= _sensors.size()) return;
+    _sensors[id].lightlevel = level;
+    if (notify) notifySensor(id);
+}
+
+String fauxmoESP::_sensorStateJson(const fauxmoesp_sensor_t& s) {
+    // Create ISO 8601 timestamp format that Home Assistant expects
+    // For simplicity, we'll use a relative timestamp format
+    char timestamp[32];
+    unsigned long currentTime = millis() / 1000; // Convert to seconds
+    snprintf(timestamp, sizeof(timestamp), "2023-01-01T%02lu:%02lu:%02lu", 
+             (currentTime / 3600) % 24, (currentTime / 60) % 60, currentTime % 60);
+    
+    switch (s.type) {
+    case SENSOR_PRESENCE:
+        return String("{\"presence\":") + (s.presence ? "true" : "false") + 
+               ",\"lastupdated\":\"" + String(timestamp) + "\"}";
+               
+    case SENSOR_TEMPERATURE:
+        // Temperature should be in centi-degrees Celsius (multiply by 100)
+        // This matches the Hue protocol specification exactly
+        return String("{\"temperature\":") + String(s.temperature) + 
+               ",\"lastupdated\":\"" + String(timestamp) + "\"}";
+               
+    case SENSOR_LIGHTLEVEL: {
+        bool dark = s.lightlevel < 10000;
+        bool daylight = s.lightlevel > 20000;
+        // Calculate lux from raw sensor value using Hue's logarithmic formula
+        uint32_t lux = s.lightlevel > 0 ? (uint32_t)(10000.0 * log10((double)s.lightlevel) + 1) : 1;
+        return "{\"lightlevel\":" + String(s.lightlevel) +
+               ",\"dark\":" + String(dark ? "true" : "false") +
+               ",\"daylight\":" + String(daylight ? "true" : "false") +
+               ",\"lux\":" + String(lux) +
+               ",\"lastupdated\":\"" + String(timestamp) + "\"}";
+    }
+    }
+    return "{\"lastupdated\":\"" + String(timestamp) + "\"}";
+}
+
+String fauxmoESP::_sensorsJson(unsigned char id) {
+    String out;
+    if (id == 0) {
+        // List all sensors - this is what Home Assistant calls during discovery
+        out = "{";
+        for (unsigned i = 0; i < _sensors.size(); ++i) {
+            if (i) out += ",";
+            const auto& s = _sensors[i];
+            out += "\"" + String(i+1) + "\":{";
+            out += "\"state\":" + _sensorStateJson(s) + ",";
+            out += "\"swupdate\":{\"state\":\"noupdates\",\"lastinstall\":\"2019-10-09T10:17:24\"},";
+            out += "\"config\":{\"on\":true,\"reachable\":" + String(s.reachable ? "true" : "false");
+            out += ",\"battery\":100,\"alert\":\"none\",\"ledindication\":false,\"usertest\":false,\"pending\":[]},";
+            out += "\"name\":\"" + String(s.name) + "\",";
+            out += "\"type\":\"" + String(_sensorTypeName(s.type)) + "\",";
+            
+            // Critical fix: Use appropriate model and product names based on sensor type
+            switch (s.type) {
+                case SENSOR_TEMPERATURE:
+                    out += "\"modelid\":\"TEMP001\",";  // Custom temperature sensor model
+                    out += "\"manufacturername\":\"ESP32 Sensors\",";
+                    out += "\"productname\":\"ESP32 Temperature Sensor\",";
+                    break;
+                case SENSOR_PRESENCE:
+                    out += "\"modelid\":\"SML001\",";  // Hue motion sensor model
+                    out += "\"manufacturername\":\"Signify Netherlands B.V.\",";
+                    out += "\"productname\":\"Hue motion sensor\",";
+                    break;
+                case SENSOR_LIGHTLEVEL:
+                    out += "\"modelid\":\"LUX001\",";  // Custom light sensor model
+                    out += "\"manufacturername\":\"ESP32 Sensors\",";
+                    out += "\"productname\":\"ESP32 Light Sensor\",";
+                    break;
+                default:
+                    out += "\"modelid\":\"GEN001\",";  // Generic sensor model
+                    out += "\"manufacturername\":\"ESP32 Sensors\",";
+                    out += "\"productname\":\"ESP32 Generic Sensor\",";
+                    break;
+            }
+            
+            out += "\"swversion\":\"1.0.0\",";  // Our custom software version
+            out += "\"uniqueid\":\"" + String(s.uniqueid) + "\",";
+            out += "\"capabilities\":{\"certified\":true,\"primary\":true}";
+            out += "}";
+        }
+        out += "}";
+    } else if (id <= _sensors.size()) {
+        // Return specific sensor - used for detailed queries
+        const auto& s = _sensors[id-1];
+        out = "{";
+        out += "\"state\":" + _sensorStateJson(s) + ",";
+        out += "\"swupdate\":{\"state\":\"noupdates\",\"lastinstall\":\"2019-10-09T10:17:24\"},";
+        out += "\"config\":{\"on\":true,\"reachable\":" + String(s.reachable ? "true" : "false");
+        out += ",\"battery\":100,\"alert\":\"none\",\"ledindication\":false,\"usertest\":false,\"pending\":[]},";
+        out += "\"name\":\"" + String(s.name) + "\",";
+        out += "\"type\":\"" + String(_sensorTypeName(s.type)) + "\",";
+        
+        // Apply the same type-specific identification for individual sensor queries
+        switch (s.type) {
+            case SENSOR_TEMPERATURE:
+                out += "\"modelid\":\"TEMP001\",";
+                out += "\"manufacturername\":\"ESP32 Sensors\",";
+                out += "\"productname\":\"ESP32 Temperature Sensor\",";
+                break;
+            case SENSOR_PRESENCE:
+                out += "\"modelid\":\"SML001\",";
+                out += "\"manufacturername\":\"Signify Netherlands B.V.\",";
+                out += "\"productname\":\"Hue motion sensor\",";
+                break;
+            case SENSOR_LIGHTLEVEL:
+                out += "\"modelid\":\"LUX001\",";
+                out += "\"manufacturername\":\"ESP32 Sensors\",";
+                out += "\"productname\":\"ESP32 Light Sensor\",";
+                break;
+            default:
+                out += "\"modelid\":\"GEN001\",";
+                out += "\"manufacturername\":\"ESP32 Sensors\",";
+                out += "\"productname\":\"ESP32 Generic Sensor\",";
+                break;
+        }
+        
+        out += "\"swversion\":\"1.0.0\",";
+        out += "\"uniqueid\":\"" + String(s.uniqueid) + "\",";
+        out += "\"capabilities\":{\"certified\":true,\"primary\":true}";
+        out += "}";
+    } else {
+        out = "{}";
+    }
+    return out;
+}
+
+
+void fauxmoESP::notifySensor(unsigned char id) {
+    if (id >= _sensors.size()) {
+        DEBUG_MSG_FAUXMO("[FAUXMO] Invalid sensor ID for notification: %d\n", id);
+        return;
+    }
+    
+    // Build proper sensor state notification
+    String sensorJson = _sensorsJson(id + 1);  // API uses 1-based indexing
+    
+    DEBUG_MSG_FAUXMO("[FAUXMO] Notifying sensor %d: %s\n", id, sensorJson.c_str());
+    
+    // Send to all connected clients
+    for (uint8_t i = 0; i < FAUXMO_TCP_MAX_CLIENTS; ++i) {
+        AsyncClient *c = _tcpClients[i];
+        if (c && c->connected()) {
+            _sendTCPResponse(c, "200 OK", (char*)sensorJson.c_str(), "application/json");
+        }
+    }
+}
+
 
 int fauxmoESP::getDeviceId(const char * device_name) {
     for (unsigned int id=0; id < _devices.size(); id++) {
@@ -886,7 +1155,9 @@ int fauxmoESP::getDeviceId(const char * device_name) {
 
 bool fauxmoESP::renameDevice(unsigned char id, const char * device_name) {
     if (id < _devices.size()) {
-        free(_devices[id].name);
+        if (_devices[id].name) {
+            free(_devices[id].name);
+        }
         _devices[id].name = strdup(device_name);
         DEBUG_MSG_FAUXMO("[FAUXMO] Device #%d renamed to '%s'\n", id, device_name);
         return true;
@@ -902,7 +1173,9 @@ bool fauxmoESP::renameDevice(const char * old_device_name, const char * new_devi
 
 bool fauxmoESP::removeDevice(unsigned char id) {
     if (id < _devices.size()) {
-        free(_devices[id].name);
+        if (_devices[id].name) {
+            free(_devices[id].name);
+        }
 		_devices.erase(_devices.begin()+id);
         DEBUG_MSG_FAUXMO("[FAUXMO] Device #%d removed\n", id);
         return true;
@@ -919,6 +1192,7 @@ bool fauxmoESP::removeDevice(const char * device_name) {
 char * fauxmoESP::getDeviceName(unsigned char id, char * device_name, size_t len) {
     if ((id < _devices.size()) && (device_name != NULL)) {
         strncpy(device_name, _devices[id].name, len);
+        if (len > 0) device_name[len-1] = '\0'; // Ensure null termination
     }
     return device_name;
 }
@@ -928,6 +1202,7 @@ char * fauxmoESP::getColormode(unsigned char id, char * cm, size_t len)
 	if (id < _devices.size())
 	{
 		strncpy(cm, _devices[id].colormode, len);
+        if (len > 0) cm[len-1] = '\0'; // Ensure null termination
 	}
 
 	return cm;

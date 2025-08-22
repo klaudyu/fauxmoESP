@@ -2,7 +2,7 @@
 
 FAUXMO ESP
 
-Copyright (C) 2016-2020 by Xose Pérez <xose dot perez at gmail dot com>, 2020-2021 by Paul Vint <paul@vintlabs.com>
+Copyright (C) 2016-2020 by Xose PÃ©rez <xose dot perez at gmail dot com>, 2020-2021 by Paul Vint <paul@vintlabs.com>
 
 The MIT License (MIT)
 
@@ -31,7 +31,7 @@ THE SOFTWARE.
 #define FAUXMO_UDP_MULTICAST_IP     IPAddress(239,255,255,250)
 #define FAUXMO_UDP_MULTICAST_PORT   1900
 #define FAUXMO_TCP_MAX_CLIENTS      10
-#define FAUXMO_TCP_PORT             1901
+#define FAUXMO_TCP_PORT             1905
 #define FAUXMO_RX_TIMEOUT           3
 #define FAUXMO_DEVICE_UNIQUE_ID_LENGTH  27
 
@@ -45,7 +45,7 @@ THE SOFTWARE.
     #error Platform not supported
 #endif
 
-//#define DEBUG_FAUXMO                Serial
+#define DEBUG_FAUXMO                Serial
 
 #ifdef DEBUG_FAUXMO
     #if defined(ARDUINO_ARCH_ESP32)
@@ -62,7 +62,7 @@ THE SOFTWARE.
 #endif
 
 #ifndef DEBUG_FAUXMO_VERBOSE_UDP
-#define DEBUG_FAUXMO_VERBOSE_UDP    false
+#define DEBUG_FAUXMO_VERBOSE_UDP    true
 #endif
 
 #include <Arduino.h>
@@ -100,6 +100,25 @@ typedef struct {
     unsigned char red, green, blue;
 } fauxmoesp_device_t;
 
+// --- Sensor support ---
+typedef enum : uint8_t {
+    SENSOR_PRESENCE,
+    SENSOR_TEMPERATURE,
+    SENSOR_LIGHTLEVEL
+} fauxmo_sensor_type_t;
+
+typedef struct {
+    char *name;
+    fauxmo_sensor_type_t type;
+    char uniqueid[FAUXMO_DEVICE_UNIQUE_ID_LENGTH];
+    bool reachable;
+    // state fields
+    bool presence;
+    int32_t temperature;   // centi-degrees C
+    uint32_t lightlevel;   // 0..65535
+} fauxmoesp_sensor_t;
+
+
 typedef std::function<void(unsigned char, const char *, bool, unsigned char, unsigned int, unsigned int, unsigned int)> TSetStateCallback;
 typedef std::function<void(unsigned char, const fauxmoesp_device_t*)> TSetStateCallbackObject;
 
@@ -130,14 +149,13 @@ class fauxmoESP {
 		bool setState(unsigned char id, bool state);
         bool setState(const char * device_name, bool state);
 
-        uint8_t getRed(unsigned char id) { return _devices[id].red; }
-        uint8_t getGreen(unsigned char id) { return _devices[id].green; }
-        uint8_t getBlue(unsigned char id) { return _devices[id].blue; }
+        uint8_t getRed(unsigned char id) { return id < _devices.size() ? _devices[id].red : 0; }
+        uint8_t getGreen(unsigned char id) { return id < _devices.size() ? _devices[id].green : 0; }
+        uint8_t getBlue(unsigned char id) { return id < _devices.size() ? _devices[id].blue : 0; }
 
-        unsigned char getBrightness(unsigned char id) { return _devices[id].value; }
-        float getX(unsigned char id) { return _devices[id].x; }
-        float getY(unsigned char id) { return _devices[id].y; }
-
+        unsigned char getBrightness(unsigned char id) { return id < _devices.size() ? _devices[id].value : 0; }
+        float getX(unsigned char id) { return id < _devices.size() ? _devices[id].x : 0.0f; }
+        float getY(unsigned char id) { return id < _devices.size() ? _devices[id].y : 0.0f; }
 
         char * getColormode(unsigned char id, char * buffer, size_t len);
 		
@@ -151,10 +169,20 @@ class fauxmoESP {
 		void notifyState(unsigned char id);
 		void notifyState(const char * device_name);
 
+    
+        // --- Sensors API ---
+        unsigned char addPresenceSensor(const char *name);
+        unsigned char addTemperatureSensor(const char *name);
+        unsigned char addLightLevelSensor(const char *name);
+        void setPresence(unsigned char id, bool present, bool notify = true);
+        void setTemperatureC(unsigned char id, float celsius, bool notify = true);
+        void setLightLevel(unsigned char id, uint32_t level, bool notify = true);
+        void notifySensor(unsigned char id);
+
     private:
 
-        String _tcpBuffer;
-        AsyncServer * _server;
+        String _tcpBuffers[FAUXMO_TCP_MAX_CLIENTS];
+        AsyncServer * _server = nullptr;
         bool _enabled = false;
         bool _internal = true;
         unsigned int _tcp_port = FAUXMO_TCP_PORT;
@@ -163,12 +191,11 @@ class fauxmoESP {
         WiFiEventHandler _handler;
 		#endif
         WiFiUDP _udp;
-        AsyncClient * _tcpClients[FAUXMO_TCP_MAX_CLIENTS];
-        TSetStateCallback _setCallback = NULL;
+        AsyncClient * _tcpClients[FAUXMO_TCP_MAX_CLIENTS] = {nullptr};
+        TSetStateCallback _setCallback = nullptr;
         TSetStateCallbackObject _setCallbackObject = nullptr;
 
-
-        String _deviceJson(unsigned char id, bool all); 	// all = true means we are listing all devices so use full description template
+        String _deviceJson(unsigned char id, bool all = true); 	// all = true means we are listing all devices so use full description template
 
         String bridgeid; 
 		
@@ -189,11 +216,17 @@ class fauxmoESP {
         bool _onTCPList(AsyncClient *client, String url, String body);
         bool _onTCPControl(AsyncClient *client, String url, String body);
         void _sendTCPResponse(AsyncClient *client, const char * code, char * body, const char * mime);
-        String _listLightsJson(unsigned char id) ;
+        String _listLightsJson(unsigned char id = 0) ;
         String _listConfig() ;
         String _listGroups() ;
         String _getLightStateJson(unsigned char id);
 
+        
+        // Sensors storage and helpers
+        String _sensorsJson(unsigned char id);
+        const char* _sensorTypeName(fauxmo_sensor_type_t t);
+        String _sensorStateJson(const fauxmoesp_sensor_t& s);
+        std::vector<fauxmoesp_sensor_t> _sensors;
         String _byte2hex(uint8_t zahl);
         String _makeMD5(String text);
         const char *_mdns_name = nullptr;
