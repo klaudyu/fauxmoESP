@@ -194,23 +194,29 @@ String fauxmoESP::_byte2hex(uint8_t zahl)
   return hstring;
 }
 
-String fauxmoESP::_makeMD5(String text)
-{
-  unsigned char bbuf[16];
-  String hash = "";
-  MD5Builder md5;
-  md5.begin();
-  md5.add(text);
-  md5.calculate();
-  
-  md5.getBytes(bbuf);
-  for (uint8_t i = 0; i < 16; i++)
-  {
-    hash += _byte2hex(bbuf[i]);
-  }
 
-  return hash;
+static String _hex32_from_bytes(const unsigned char *buf16) {
+  char hex[33];
+  for (int i = 0; i < 16; i++) sprintf(hex + 2*i, "%02x", buf16[i]);
+  hex[32] = 0;
+  return String(hex);
 }
+
+String fauxmoESP::_makeMD5(String text) {
+  unsigned char full[32];
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts_ret(&ctx, 0 /* 0=SHA-256, 1=SHA-224 */);
+  mbedtls_sha256_update_ret(&ctx,
+      reinterpret_cast<const unsigned char*>(text.c_str()),
+      text.length());
+  mbedtls_sha256_finish_ret(&ctx, full);
+  mbedtls_sha256_free(&ctx);
+
+  // Keep 32 hex chars by truncating to 16 bytes (128 bits)
+  return _hex32_from_bytes(full /* first 16 bytes */);
+}
+
 
 bool fauxmoESP::_onTCPDescription(AsyncClient *client, String url, String body) {
 
