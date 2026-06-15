@@ -139,6 +139,8 @@ void fauxmoESP::_sendTCPResponse(AsyncClient *client, const char * code, char * 
 		DEBUG_MSG_FAUXMO("[FAUXMO] Response:\n%s%s\n", headers, body);
 	#endif
 
+
+
 	client->write(headers);
 	client->write(body);
 
@@ -180,6 +182,13 @@ String fauxmoESP::_deviceJson(unsigned char id, bool all) {
 		);
 	}
 
+    // #if defined(DEBUG_FAUXMO_DUMP_JSON)
+    //     DEBUG_MSG_FAUXMO("[FAUXMO] JSON payload (%u bytes): %s\n",
+    //                 (unsigned) strlen(buffer), buffer);
+    // #endif
+
+
+
 	return String(buffer);
 }
 
@@ -206,11 +215,11 @@ String fauxmoESP::_makeMD5(String text) {
   unsigned char full[32];
   mbedtls_sha256_context ctx;
   mbedtls_sha256_init(&ctx);
-  mbedtls_sha256_starts_ret(&ctx, 0 /* 0=SHA-256, 1=SHA-224 */);
-  mbedtls_sha256_update_ret(&ctx,
+  mbedtls_sha256_starts(&ctx, 0 /* 0=SHA-256, 1=SHA-224 */);
+  mbedtls_sha256_update(&ctx,
       reinterpret_cast<const unsigned char*>(text.c_str()),
       text.length());
-  mbedtls_sha256_finish_ret(&ctx, full);
+  mbedtls_sha256_finish(&ctx, full);
   mbedtls_sha256_free(&ctx);
 
   // Keep 32 hex chars by truncating to 16 bytes (128 bits)
@@ -266,6 +275,13 @@ String fauxmoESP::_listLightsJson(unsigned char id) {
     else {
         response = "{}";
     }
+
+    // #if defined(DEBUG_FAUXMO_DUMP_JSON)
+    // DEBUG_MSG_FAUXMO("[FAUXMO] JSON payload (%u bytes): %s\n",
+    //                     (unsigned) response.length(), response.c_str());
+    // #endif
+
+
     
     return response;
 }
@@ -326,6 +342,22 @@ String fauxmoESP::_listGroups() {
 
 bool fauxmoESP::_onTCPList(AsyncClient *client, String url, String body) {
     DEBUG_MSG_FAUXMO("[FAUXMO] Handling list request for URL: %s\n", url.c_str());
+    if (client) {
+            String rip = client->remoteIP().toString();
+            uint16_t rport = client->remotePort();
+            DEBUG_MSG_FAUXMO("[FAUXMO] client=%p remote=%s:%u\n", client, rip.c_str(), rport);
+
+            // If your AsyncTCP build provides local endpoint access, this will compile; otherwise it’s skipped.
+            #if defined(ASYNC_TCP_SSL_ENABLED) || defined(ARDUINO_ARCH_ESP32)
+            if (client->localPort()) {
+                String lip = client->localIP().toString();
+                uint16_t lport = client->localPort();
+                DEBUG_MSG_FAUXMO("[FAUXMO] local=%s:%u\n", lip.c_str(), lport);
+            }
+            #endif
+    } else {
+            DEBUG_MSG_FAUXMO("[FAUXMO] client=<null>\n");
+    }
 
     String response;
     bool option_set = false;
@@ -459,13 +491,10 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 		DEBUG_MSG_FAUXMO("[FAUXMO] Handling state request\n");
 
 		// Get the index
-		unsigned char id = url.substring(pos+7).toInt();
-		if (id > 0) {
+		unsigned int requestedId = url.substring(pos+7).toInt();
+		if ((requestedId > 0) && (requestedId <= _devices.size())) {
 
-			--id;
-
-			// Check bounds after decrementing
-			if (id >= _devices.size()) return false;
+			unsigned char id = requestedId - 1;
 
 			// Brightness
 			pos = body.indexOf("bri");
@@ -559,6 +588,9 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 
 			return true;
 
+		} else {
+			_sendTCPResponse(client, "404 Not Found", (char *) "{}", "application/json");
+			return true;
 		}
 
 	}
@@ -568,68 +600,130 @@ bool fauxmoESP::_onTCPControl(AsyncClient *client, String url, String body) {
 }
 
 bool fauxmoESP::_onTCPRequest(AsyncClient *client, bool isGet, String url, String body) {
-
     if (!_enabled) return false;
 
-	#if DEBUG_FAUXMO_VERBOSE_TCP
-		DEBUG_MSG_FAUXMO("================TCP REQUEST================================")
-		DEBUG_MSG_FAUXMO("[FAUXMO] isGet: %s\n", isGet ? "true" : "false");
-		DEBUG_MSG_FAUXMO("[FAUXMO] URL: %s\n", url.c_str());
-		if (!isGet) DEBUG_MSG_FAUXMO("[FAUXMO] Body:\n%s\n", body.c_str());
-	#endif
+    #if DEBUG_FAUXMO_VERBOSE_TCP
+        DEBUG_MSG_FAUXMO("================TCP REQUEST================================\n");
 
-	if (url.equals("/description.xml")) {
+        // Print client pointer and remote endpoint
+        if (client) {
+            String rip = client->remoteIP().toString();
+            uint16_t rport = client->remotePort();
+            DEBUG_MSG_FAUXMO("[FAUXMO] client=%p remote=%s:%u\n", client, rip.c_str(), rport);
+
+            // If your AsyncTCP build provides local endpoint access, this will compile; otherwise it’s skipped.
+            #if defined(ASYNC_TCP_SSL_ENABLED) || defined(ARDUINO_ARCH_ESP32)
+            if (client->localPort()) {
+                String lip = client->localIP().toString();
+                uint16_t lport = client->localPort();
+                DEBUG_MSG_FAUXMO("[FAUXMO] local=%s:%u\n", lip.c_str(), lport);
+            }
+            #endif
+        } else {
+            DEBUG_MSG_FAUXMO("[FAUXMO] client=<null>\n");
+        }
+
+        DEBUG_MSG_FAUXMO("[FAUXMO] isGet: %s\n", isGet ? "true" : "false");
+        DEBUG_MSG_FAUXMO("[FAUXMO] URL: %s\n", url.c_str());
+        if (!isGet) DEBUG_MSG_FAUXMO("[FAUXMO] Body:\n%s\n", body.c_str());
+    #endif
+
+    if (url.equals("/description.xml")) {
         return _onTCPDescription(client, url, body);
     }
 
-	if (url.startsWith("/api")) {
-		if (isGet) {
-			return _onTCPList(client, url, body);
-		} else {
-       		return _onTCPControl(client, url, body);
-		}
-	}
+    if (url.startsWith("/api")) {
+        if (isGet) {
+            return _onTCPList(client, url, body);
+        } else {
+            return _onTCPControl(client, url, body);
+        }
+    }
 
-	return false;
-
+    return false;
 }
+
+// bool fauxmoESP::_onTCPRequest(AsyncClient *client, bool isGet, String url, String body) {
+
+//     if (!_enabled) return false;
+
+// 	#if DEBUG_FAUXMO_VERBOSE_TCP
+// 		DEBUG_MSG_FAUXMO("================TCP REQUEST================================")
+// 		DEBUG_MSG_FAUXMO("[FAUXMO] isGet: %s\n", isGet ? "true" : "false");
+// 		DEBUG_MSG_FAUXMO("[FAUXMO] URL: %s\n", url.c_str());
+// 		if (!isGet) DEBUG_MSG_FAUXMO("[FAUXMO] Body:\n%s\n", body.c_str());
+// 	#endif
+
+// 	if (url.equals("/description.xml")) {
+//         return _onTCPDescription(client, url, body);
+//     }
+
+// 	if (url.startsWith("/api")) {
+// 		if (isGet) {
+// 			return _onTCPList(client, url, body);
+// 		} else {
+//        		return _onTCPControl(client, url, body);
+// 		}
+// 	}
+
+// 	return false;
+
+// }
 
 
 bool fauxmoESP::_onTCPData(AsyncClient *client, void *data, size_t len) {
 
-    if (!_enabled) return false;
+    if (!_enabled || !client || !data || !len) return false;
 
     int idx = -1;
     for (uint8_t i = 0; i < FAUXMO_TCP_MAX_CLIENTS; ++i) if (_tcpClients[i] == client) { idx = i; break; }
     if (idx < 0) return false;
 
-    _tcpBuffers[idx] += String((char*)data, len);
+    String &tcpBuffer = _tcpBuffers[idx];
+    if (tcpBuffer.length() + len > FAUXMO_TCP_MAX_REQUEST_SIZE) {
+        tcpBuffer = "";
+        client->close();
+        return false;
+    }
+
+    tcpBuffer += String((char*)data, len);
 
     // Check if we have a complete request
-    int headerEnd = _tcpBuffers[idx].indexOf("\r\n\r\n");
+    int headerEnd = tcpBuffer.indexOf("\r\n\r\n");
     if (headerEnd == -1) { return false;  // Incomplete header 
 	}
 
     // Check for Content-Length
-    int contentLengthPos = _tcpBuffers[idx].indexOf("Content-Length: ");
+    int contentLengthPos = tcpBuffer.indexOf("Content-Length: ");
     if (contentLengthPos != -1) {
-        int contentLengthEnd = _tcpBuffers[idx].indexOf("\r\n", contentLengthPos);
-        int contentLength = _tcpBuffers[idx].substring(contentLengthPos + 16, contentLengthEnd).toInt();
-        if (_tcpBuffers[idx].length() < (unsigned int)(headerEnd + 4 + contentLength)) {
+        int contentLengthEnd = tcpBuffer.indexOf("\r\n", contentLengthPos);
+        int contentLength = tcpBuffer.substring(contentLengthPos + 16, contentLengthEnd).toInt();
+        if ((contentLengthEnd == -1) || (contentLength < 0) ||
+            (contentLength > FAUXMO_TCP_MAX_REQUEST_SIZE - headerEnd - 4)) {
+            tcpBuffer = "";
+            client->close();
+            return false;
+        }
+        if (tcpBuffer.length() < (unsigned int)(headerEnd + 4 + contentLength)) {
             return false;  // Incomplete body
         }
     }
 
     // Parse the request
-    int methodEnd = _tcpBuffers[idx].indexOf(' ');
-    int urlEnd = _tcpBuffers[idx].indexOf(' ', methodEnd + 1);
+    int methodEnd = tcpBuffer.indexOf(' ');
+    int urlEnd = tcpBuffer.indexOf(' ', methodEnd + 1);
+    if ((methodEnd <= 0) || (urlEnd <= methodEnd + 1)) {
+        tcpBuffer = "";
+        client->close();
+        return false;
+    }
     
-    String method = _tcpBuffers[idx].substring(0, methodEnd);
-    String url = _tcpBuffers[idx].substring(methodEnd + 1, urlEnd);
-    String body = _tcpBuffers[idx].substring(headerEnd + 4);
+    String method = tcpBuffer.substring(0, methodEnd);
+    String url = tcpBuffer.substring(methodEnd + 1, urlEnd);
+    String body = tcpBuffer.substring(headerEnd + 4);
 
     bool isGet = (method == "GET");
-    _tcpBuffers[idx] = "";  // Clear the buffer
+    tcpBuffer = "";
     return _onTCPRequest(client, isGet, url.c_str(), body.c_str());
 }
 
@@ -639,7 +733,7 @@ bool fauxmoESP::_onTCPData(AsyncClient *client, void *data, size_t len) {
 void fauxmoESP::_onTCPClient(AsyncClient *client) {
     if (!_enabled) {
         DEBUG_MSG_FAUXMO("[FAUXMO] Rejecting client - Disabled\n");
-        client->close(true);
+        client->close();
         return;
     }
 
@@ -652,7 +746,7 @@ void fauxmoESP::_onTCPClient(AsyncClient *client) {
     }
 
     for (uint8_t i = 0; i < FAUXMO_TCP_MAX_CLIENTS; i++) {
-        if (!_tcpClients[i] || !_tcpClients[i]->connected()) {
+        if (!_tcpClients[i]) {
             _tcpClients[i] = client;
 
             client->onAck([i](void *s, AsyncClient *c, size_t len, uint32_t time) {}, 0);
@@ -660,9 +754,9 @@ void fauxmoESP::_onTCPClient(AsyncClient *client) {
                 _onTCPData(c, data, len);
             }, 0);
             client->onDisconnect([this, i](void *s, AsyncClient *c) {
-                if (_tcpClients[i]) {
-                    _tcpClients[i]->free();
+                if (_tcpClients[i] == c) {
                     _tcpClients[i] = nullptr;
+                    _tcpBuffers[i] = "";
                 }
                 delete c;
                 DEBUG_MSG_FAUXMO("[FAUXMO] Client #%d disconnected\n", i);
@@ -686,7 +780,7 @@ void fauxmoESP::_onTCPClient(AsyncClient *client) {
         c->free();
         delete c;
     });
-    client->close(true);
+    client->close();
 }
 
 //end updated by chatgpt
@@ -904,19 +998,21 @@ fauxmoESP::~fauxmoESP() {
 
 void fauxmoESP::setDeviceUniqueId(unsigned char id, const char *uniqueid)
 {
-    if (id < _devices.size()) {
-        strncpy(_devices[id].uniqueid, uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH);
-        _devices[id].uniqueid[FAUXMO_DEVICE_UNIQUE_ID_LENGTH - 1] = '\0'; // Ensure null termination
-    }
+    if (!_validDevice(id) || !uniqueid) return;
+    strncpy(_devices[id].uniqueid, uniqueid, FAUXMO_DEVICE_UNIQUE_ID_LENGTH - 1);
+    _devices[id].uniqueid[FAUXMO_DEVICE_UNIQUE_ID_LENGTH - 1] = '\0';
 }
 
 unsigned char fauxmoESP::addDevice(const char * device_name) {
 
-    fauxmoesp_device_t device;
+    if (!device_name || _devices.size() >= 255) return 255;
+
+    fauxmoesp_device_t device{};
     unsigned int device_id = _devices.size();
 
     // init properties
     device.name = strdup(device_name);
+    if (!device.name) return 255;
 	device.state = false;
 	device.value = 0;
 	device.hue = 0;
@@ -953,8 +1049,10 @@ const char* fauxmoESP::_sensorTypeName(fauxmo_sensor_type_t t) {
 }
 
 unsigned char fauxmoESP::addPresenceSensor(const char *name) {
+    if (!name || _sensors.size() >= 255) return 255;
     fauxmoesp_sensor_t s{};
     s.name = strdup(name);
+    if (!s.name) return 255;
     s.type = SENSOR_PRESENCE;
     s.reachable = true;
     String mac = WiFi.macAddress();
@@ -964,8 +1062,10 @@ unsigned char fauxmoESP::addPresenceSensor(const char *name) {
 }
 
 unsigned char fauxmoESP::addTemperatureSensor(const char *name) {
+    if (!name || _sensors.size() >= 255) return 255;
     fauxmoesp_sensor_t s{};
     s.name = strdup(name);
+    if (!s.name) return 255;
     s.type = SENSOR_TEMPERATURE;
     s.reachable = true;
     String mac = WiFi.macAddress();
@@ -975,8 +1075,10 @@ unsigned char fauxmoESP::addTemperatureSensor(const char *name) {
 }
 
 unsigned char fauxmoESP::addLightLevelSensor(const char *name) {
+    if (!name || _sensors.size() >= 255) return 255;
     fauxmoesp_sensor_t s{};
     s.name = strdup(name);
+    if (!s.name) return 255;
     s.type = SENSOR_LIGHTLEVEL;
     s.reachable = true;
     String mac = WiFi.macAddress();
@@ -1151,6 +1253,7 @@ void fauxmoESP::notifySensor(unsigned char id) {
 
 
 int fauxmoESP::getDeviceId(const char * device_name) {
+    if (!device_name) return -1;
     for (unsigned int id=0; id < _devices.size(); id++) {
         if (strcmp(_devices[id].name, device_name) == 0) {
             return id;
@@ -1160,11 +1263,11 @@ int fauxmoESP::getDeviceId(const char * device_name) {
 }
 
 bool fauxmoESP::renameDevice(unsigned char id, const char * device_name) {
-    if (id < _devices.size()) {
-        if (_devices[id].name) {
-            free(_devices[id].name);
-        }
-        _devices[id].name = strdup(device_name);
+    if (_validDevice(id) && device_name) {
+        char *newName = strdup(device_name);
+        if (!newName) return false;
+        free(_devices[id].name);
+        _devices[id].name = newName;
         DEBUG_MSG_FAUXMO("[FAUXMO] Device #%d renamed to '%s'\n", id, device_name);
         return true;
     }
@@ -1196,22 +1299,61 @@ bool fauxmoESP::removeDevice(const char * device_name) {
 }
 
 char * fauxmoESP::getDeviceName(unsigned char id, char * device_name, size_t len) {
-    if ((id < _devices.size()) && (device_name != NULL)) {
-        strncpy(device_name, _devices[id].name, len);
-        if (len > 0) device_name[len-1] = '\0'; // Ensure null termination
+    if (_validDevice(id) && device_name && len) {
+        strncpy(device_name, _devices[id].name, len - 1);
+        device_name[len - 1] = '\0';
     }
     return device_name;
 }
 
 char * fauxmoESP::getColormode(unsigned char id, char * cm, size_t len)
 {
-	if (id < _devices.size())
+	if (_validDevice(id) && cm && len)
 	{
-		strncpy(cm, _devices[id].colormode, len);
-        if (len > 0) cm[len-1] = '\0'; // Ensure null termination
+		strncpy(cm, _devices[id].colormode, len - 1);
+        cm[len - 1] = '\0';
 	}
 
 	return cm;
+}
+
+// ----
+bool fauxmoESP::getState(unsigned char idx, fauxmoesp_device_t &out) const {
+    if (idx >= _devices.size()) return false;
+    // Shallow copy is fine for inspection (pointers remain owned by the lib)
+    out = _devices[idx];
+    return true;
+}
+
+void fauxmoESP::printState(unsigned char idx) const {
+    if (idx >= _devices.size()) {
+        DEBUG_MSG_FAUXMO("[FAUXMO] printState: idx=%u out of range (size=%u)\n",
+                         (unsigned)idx, (unsigned)_devices.size());
+        return;
+    }
+    const auto &d = _devices[idx];
+
+    const char *name = d.name ? d.name : "";
+    const char *cm   = (d.colormode && d.colormode[0]) ? d.colormode : "-";
+
+    DEBUG_MSG_FAUXMO(
+        "[FAUXMO] state idx=%u name='%s' on=%s bri=%u hue=%u sat=%u ct=%u x=%.4f y=%.4f colormode=%s\n",
+        (unsigned)idx,
+        name,
+        d.state ? "true" : "false",
+        (unsigned)d.value,
+        (unsigned)d.hue,
+        (unsigned)d.saturation,
+        (unsigned)d.ct,
+        d.x, d.y,
+        cm
+    );
+}
+
+void fauxmoESP::printAllStates() const {
+    for (unsigned i = 0; i < _devices.size(); i++) {
+        printState((unsigned char)i);
+    }
 }
 
 
@@ -1219,6 +1361,7 @@ char * fauxmoESP::getColormode(unsigned char id, char * cm, size_t len)
 
 // For hue / Saturation
 bool fauxmoESP::setState(unsigned char id, bool state, unsigned int hue, unsigned int saturation) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state, hue, saturation\n");
 	if (id < _devices.size()) 
 	{
 		_devices[id].hue = hue;
@@ -1229,6 +1372,7 @@ bool fauxmoESP::setState(unsigned char id, bool state, unsigned int hue, unsigne
 }
 
 bool fauxmoESP::setState(const char * device_name, bool state, unsigned int hue, unsigned int saturation) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state, hue, saturation\n");
 	int id = getDeviceId(device_name);
 	if (id < 0) 
 		return false;
@@ -1239,6 +1383,7 @@ bool fauxmoESP::setState(const char * device_name, bool state, unsigned int hue,
 
 // For Colour Temperature (ct)
 bool fauxmoESP::setState(unsigned char id, bool state, unsigned int ct) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state, ct\n");
 	if (id < _devices.size()) 
 	{
 		_devices[id].ct = ct;
@@ -1249,6 +1394,7 @@ bool fauxmoESP::setState(unsigned char id, bool state, unsigned int ct) {
 }
 
 bool fauxmoESP::setState(const char * device_name, bool state, unsigned int ct) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state, ct\n");
 	int id = getDeviceId(device_name);
 	if (id < 0) return false;
 
@@ -1259,6 +1405,7 @@ bool fauxmoESP::setState(const char * device_name, bool state, unsigned int ct) 
 }
 
 bool fauxmoESP::setState(unsigned char id, bool state, unsigned char value) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state, value\n");
     if (id < _devices.size()) {
 		_devices[id].state = state;
 		_devices[id].value = value;
@@ -1268,6 +1415,7 @@ bool fauxmoESP::setState(unsigned char id, bool state, unsigned char value) {
 }
 
 bool fauxmoESP::setState(const char * device_name, bool state, unsigned char value) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state, value\n");
 	int id = getDeviceId(device_name);
 	if (id < 0) return false;
 	_devices[id].state = state;
@@ -1277,6 +1425,7 @@ bool fauxmoESP::setState(const char * device_name, bool state, unsigned char val
 
 
 bool fauxmoESP::setState(unsigned char id, bool state) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state\n");
     if (id < _devices.size()) {
 		_devices[id].state = state;
 		return true;
@@ -1285,6 +1434,7 @@ bool fauxmoESP::setState(unsigned char id, bool state) {
 }
 
 bool fauxmoESP::setState(const char * device_name, bool state) {
+    DEBUG_MSG_FAUXMO( "[FAUXMO][WRITE] setState state\n");
 	int id = getDeviceId(device_name);
 	if (id < 0) return false;
 	_devices[id].state = state;

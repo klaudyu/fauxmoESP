@@ -31,6 +31,7 @@ THE SOFTWARE.
 #define FAUXMO_UDP_MULTICAST_IP     IPAddress(239,255,255,250)
 #define FAUXMO_UDP_MULTICAST_PORT   1900
 #define FAUXMO_TCP_MAX_CLIENTS      10
+#define FAUXMO_TCP_MAX_REQUEST_SIZE 4096
 #define FAUXMO_TCP_PORT             1905
 #define FAUXMO_RX_TIMEOUT           3
 #define FAUXMO_DEVICE_UNIQUE_ID_LENGTH  27
@@ -180,6 +181,9 @@ class fauxmoESP {
         void setTemperatureC(unsigned char id, float celsius, bool notify = true);
         void setLightLevel(unsigned char id, uint32_t level, bool notify = true);
         void notifySensor(unsigned char id);
+        bool getState(unsigned char idx, fauxmoesp_device_t &out) const;
+        void printState(unsigned char idx) const;
+        void printAllStates() const;
 
     private:
 
@@ -233,4 +237,5 @@ class fauxmoESP {
         String _makeMD5(String text);
         const char *_mdns_name = nullptr;
         void _startMDNS();
+        bool _validDevice(unsigned char id) const { return id < _devices.size(); }
 };
